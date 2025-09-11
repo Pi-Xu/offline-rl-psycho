@@ -1,0 +1,30 @@
+[project]
+name = "mdpmm"
+version = "0.1.0"
+description = "MDPMM: DQN baseline and beta estimation scaffolding"
+authors = [{ name = "Wenqian", email = "wenqian.pi.x@gmail.com" }]
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=1.23",
+    "pyyaml>=6.0",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "torch>=2.1; extra == 'cpu'",
+]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+    "ruff>=0.5.0",
+    "black>=24.0",
+    "mypy>=1.10",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.black]
+line-length = 100
+
