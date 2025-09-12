@@ -19,7 +19,9 @@ Non-Goals (initial)
 
 System Overview
 
-- Environment: PegEnv (Gym-compatible), exposes obs and action_mask.
+- Environment: PegEnv (Gym-compatible), exposes obs and action_mask. Supports
+  both 7x7 English cross (env_id: `peg7x7`) and a compact 4x4 variant
+  (env_id: `peg4x4`) for faster iteration.
 - Agent: DQN with MLP, Huber loss, target sync, epsilon for exploration off by default (use softmax with β during rollouts).
 - Data Generator: runs policy with fixed β_true to create reproducible datasets.
 - Estimator: β MLE with gradient/Hessian; returns β_hat and standard error.

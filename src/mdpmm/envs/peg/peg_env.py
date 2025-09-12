@@ -46,7 +46,7 @@ class StepResult:
 class PegSolEnv:
     """Peg Solitaire 7x7 environment with discrete enumerated actions and masks.
 
-    - Observation: flattened 49-d vector (invalid cells are always 0).
+    - Observation: flattened HxW vector (invalid cells are always 0).
     - Action space: precomputed list of legal jump templates; per-state mask marks legal ones.
     - Reward: per-step penalty (default −1). If solved (single peg left),
       add a large bonus (default +100). If the episode terminates unsolved,
@@ -59,16 +59,24 @@ class PegSolEnv:
     def __init__(
         self,
         *,
+        valid_mask: np.ndarray | None = None,
+        initial_empty: Tuple[int, int] | None = None,
         step_penalty: float = -1.0,
         solved_bonus: float = 100.0,
         unsolved_penalty_per_peg: float = 5.0,
     ):
-        self.valid_mask = _default_board_mask()  # 7x7
+        self.valid_mask = valid_mask.copy() if valid_mask is not None else _default_board_mask()
         self.actions: List[Action] = _enumerate_actions(self.valid_mask)
         self.num_actions: int = len(self.actions)
-        self.obs_shape = (49,)
+        H, W = self.valid_mask.shape
+        self.obs_shape = (H * W,)
         self._board: np.ndarray | None = None
         self._steps = 0
+        # Initial empty slot; default to center
+        if initial_empty is None:
+            self._initial_empty = (H // 2, W // 2)
+        else:
+            self._initial_empty = initial_empty
         # Reward shaping parameters
         self.step_penalty = float(step_penalty)
         self.solved_bonus = float(solved_bonus)
@@ -79,8 +87,10 @@ class PegSolEnv:
         if seed is not None:
             np.random.seed(seed)
         board = self.valid_mask.astype(np.int8)
-        # center empty
-        board[3, 3] = 0
+        # initial empty
+        r0, c0 = self._initial_empty
+        if 0 <= r0 < board.shape[0] and 0 <= c0 < board.shape[1]:
+            board[r0, c0] = 0
         self._board = board
         self._steps = 0
         return self._obs(), {"action_mask": self.legal_action_mask()}
