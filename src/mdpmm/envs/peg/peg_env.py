@@ -48,17 +48,32 @@ class PegSolEnv:
 
     - Observation: flattened 49-d vector (invalid cells are always 0).
     - Action space: precomputed list of legal jump templates; per-state mask marks legal ones.
-    - Reward: -1 per move; +100 bonus upon solving (single peg left).
+    - Reward: per-step penalty (default −1). If solved (single peg left),
+      add a large bonus (default +100). If the episode terminates unsolved,
+      add an extra penalty proportional to the number of remaining pegs
+      above 1 (default −5 per peg). This makes “leaving more pegs” strictly
+      worse than taking a few extra steps to remove them.
     - Termination: solved (1 peg) or no legal moves or reaching max steps in episode control.
     """
 
-    def __init__(self):
+    def __init__(
+        self,
+        *,
+        step_penalty: float = -1.0,
+        solved_bonus: float = 100.0,
+        unsolved_penalty_per_peg: float = 5.0,
+    ):
         self.valid_mask = _default_board_mask()  # 7x7
         self.actions: List[Action] = _enumerate_actions(self.valid_mask)
         self.num_actions: int = len(self.actions)
         self.obs_shape = (49,)
         self._board: np.ndarray | None = None
         self._steps = 0
+        # Reward shaping parameters
+        self.step_penalty = float(step_penalty)
+        self.solved_bonus = float(solved_bonus)
+        # Applied at terminal if unsolved: penalty_per_peg * max(0, pegs_remaining - 1)
+        self.unsolved_penalty_per_peg = float(unsolved_penalty_per_peg)
 
     def reset(self, seed: int | None = None) -> Tuple[np.ndarray, Dict]:
         if seed is not None:
@@ -99,11 +114,22 @@ class PegSolEnv:
         self._steps += 1
 
         done, solved = self._is_terminal()
-        reward = -1.0
-        if done and solved:
-            reward += 100.0
+        reward = self.step_penalty
+        if done:
+            if solved:
+                reward += self.solved_bonus
+            else:
+                # Penalize proportionally to remaining pegs beyond 1
+                pegs_remaining = int(self._board.sum())
+                extra_pegs = max(0, pegs_remaining - 1)
+                reward -= self.unsolved_penalty_per_peg * extra_pegs
         info = {"solved": solved, "action_mask": self.legal_action_mask()}
         return StepResult(self._obs(), reward=reward, done=done, info=info)
+
+    # Small helper kept internal for testing and clarity
+    def _unsolved_terminal_penalty(self, pegs_remaining: int) -> float:
+        extra = max(0, pegs_remaining - 1)
+        return self.unsolved_penalty_per_peg * extra
 
     def _obs(self) -> np.ndarray:
         assert self._board is not None
@@ -118,4 +144,3 @@ class PegSolEnv:
         if not self.legal_action_mask().any():
             return True, False
         return False, False
-

@@ -30,7 +30,9 @@ Environment (Peg Solitaire)
 
 - Observation: 7x7 board flattened to length-49 vector; invalid slots masked.
 - Action space: enumerated jumps (from, over, to) in four directions; mask illegal actions.
-- Reward: per-step −1; solve +100; fail 0 or small negative; discount γ fixed (e.g., 0.99).
+- Reward: per-step −1; solve +100. If the episode ends unsolved, add an
+  extra penalty proportional to remaining pegs above 1 (default −5 per peg),
+  so leaving more pegs is worse than taking a few extra steps. Discount γ fixed (e.g., 0.99).
 - Termination: 1 peg left or no legal actions; optional max steps.
 - Determinism: reset(seed=...); stable reward scale for Q identifiability.
 
