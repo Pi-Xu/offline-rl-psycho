@@ -1,0 +1,9 @@
+# Training loop
+max_steps_per_episode: 150
+train_episodes: 1000
+eval_every: 50
+
+# Misc
+seed: 42
+device: cpu
+

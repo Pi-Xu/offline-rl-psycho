@@ -1,0 +1,22 @@
+defaults:
+  - env: peg7x7
+  - algo: dqn
+  - train: default
+  - eval: default
+  - paths: default
+  - _self_
+
+# Top-level switches
+# Default run_id uses timestamp; override on CLI to set a fixed ID
+run_id: ${now:%Y%m%d_%H%M%S}
+
+# Configure Hydra to place its run/multirun outputs under the artifacts tree
+hydra:
+  job:
+    chdir: true
+  run:
+    # Place Hydra run dir directly under artifacts/<run_id>
+    dir: ${paths.artifacts_dir}/${run_id}
+  sweep:
+    dir: ${paths.artifacts_dir}/multirun/${now:%Y%m%d_%H%M%S}
+    subdir: ${hydra.job.num}

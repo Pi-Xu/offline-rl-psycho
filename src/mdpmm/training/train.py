@@ -1,16 +1,14 @@
 from __future__ import annotations
 
-import argparse
 import json
 import os
-from pathlib import Path
 from typing import Dict
 
 import numpy as np
 
 from mdpmm.envs import make_env
 from mdpmm.models.dqn import DQNAgent, ReplayBuffer, Transition
-from mdpmm.utils.config import AppSettings, TrainDqnConfig, load_train_config, materialize_run_dir
+from mdpmm.utils.config import AppSettings, TrainDqnConfig, materialize_run_dir
 from mdpmm.utils.io import append_jsonl, ensure_dir, save_json
 from mdpmm.utils.logging import setup_logging
 from mdpmm.utils.seeding import set_global_seeds
@@ -46,7 +44,7 @@ def evaluate(env_id: str, agent: DQNAgent, episodes: int, max_steps: int, seed: 
                 break
         returns.append(total_r)
         steps_list.append(steps)
-    success_rate = float(solved_count / episodes)
+    success_rate = float(solved_count / episodes) if episodes > 0 else 0.0
     return {
         "success_rate": success_rate,
         "avg_return": float(np.mean(returns) if returns else 0.0),
@@ -59,7 +57,8 @@ def train_dqn(config: TrainDqnConfig) -> None:
     AppSettings()  # load .env defaults if present
     seed = set_global_seeds(config.seed)
 
-    run_dir = materialize_run_dir(config.artifacts_dir, config.run_id)
+    # If Hydra provided a run directory, prefer it to avoid duplicate nesting
+    run_dir = config.run_dir or materialize_run_dir(config.artifacts_dir, config.run_id)
     ensure_dir(run_dir)
     save_json(json.loads(config.model_dump_json()), os.path.join(run_dir, "config.json"))
 
@@ -152,22 +151,3 @@ def train_dqn(config: TrainDqnConfig) -> None:
 
     # Write final summary
     save_json({"best": best, "last_eval": eval_stats}, os.path.join(run_dir, "summary.json"))
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="MDPMM CLI")
-    sub = parser.add_subparsers(dest="cmd", required=True)
-
-    p_train = sub.add_parser("train-dqn", help="Train DQN on a registered env")
-    p_train.add_argument("--config", type=str, default=None, help="Path to YAML config")
-
-    args = parser.parse_args()
-
-    if args.cmd == "train-dqn":
-        cfg = load_train_config(args.config)
-        train_dqn(cfg)
-
-
-if __name__ == "__main__":
-    main()
-

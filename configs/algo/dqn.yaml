@@ -1,0 +1,14 @@
+# DQN algorithm hyperparameters
+gamma: 0.99
+lr: 0.0003
+batch_size: 128
+replay_capacity: 50000
+learning_starts: 1000
+target_update_interval: 1000
+
+# Exploration schedule (epsilon-greedy)
+epsilon:
+  start: 1.0
+  end: 0.05
+  decay_steps: 50000
+

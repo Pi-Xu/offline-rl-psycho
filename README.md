@@ -34,24 +34,39 @@ Optional environment variables: copy `.env.example` to `.env` and adjust
 - `SEED` (default 42)
 - `ARTIFACTS_DIR` (default `artifacts`)
 
-## Train
-With defaults:
+## Train (Hydra)
+
+Use Hydra + OmegaConf for fully config-driven training. Parameters are composed from `configs/` and can be overridden from the CLI.
+
+Note: Hydra's run directory is set to `${paths.artifacts_dir}/${run_id}` (see `configs/config.yaml`).
+This avoids a top-level `outputs/` folder — all logs/configs end up directly under the run folder alongside training artifacts.
+
+### Hydra + OmegaConf
+
+Compose configs and override from the command line. This enables splitting parameters across files (env, algo, train, eval, paths) and controlling them via CLI.
+
+Run with Hydra entrypoint:
 
 ```bash
-python -m mdpmm.inference.cli train-dqn
+python -m mdpmm.training.hydra_train \
+  env=peg7x7 algo=dqn \
+  train.train_episodes=200 eval.eval_episodes=5 \
+  paths.artifacts_dir=artifacts/models/peg/dqn \
+  run_id=test_run
 ```
 
-With config:
+Config files live under `configs/`:
 
-```bash
-python -m mdpmm.inference.cli train-dqn --config configs/train_dqn.yaml
-```
+- `configs/config.yaml` – top-level defaults and switches
+- `configs/env/*.yaml` – environment selection
+- `configs/algo/*.yaml` – algorithm hyperparameters (e.g., DQN)
+- `configs/train/*.yaml` – training loop settings
+- `configs/eval/*.yaml` – evaluation settings
+- `configs/paths/*.yaml` – artifact/output paths
 
-### Key Config Fields (`configs/train_dqn.yaml`)
-- Env: `env_id` (`peg7x7` or `peg4x4`), `max_steps_per_episode`, `train_episodes`
-- DQN: `gamma`, `lr`, `batch_size`, `replay_capacity`, `learning_starts`, `target_update_interval`
-- Exploration: `epsilon_start`, `epsilon_end`, `epsilon_decay_steps`
-- Misc: `seed`, `device` (`cpu`), `artifacts_dir`, `run_id` (optional)
+Hydra supports overrides for any key, e.g. `algo.lr=1e-3 train.device=cuda`.
+
+
 
 ## Artifacts
 Saved under `artifacts/models/peg/dqn/<run_id>/`:
@@ -84,9 +99,10 @@ Outputs PNGs in `<run_id>/plots/`:
 - `src/mdpmm/`
   - `envs/` — Peg Solitaire (`peg_env.py`), registry (`make_env`)
   - `models/` — `dqn.py` (MLP Q-network, replay buffer, agent)
-  - `inference/cli.py` — training entrypoint; `inference/plots.py` — plotting utility
+  - `training/` — `hydra_train.py` (Hydra entrypoint), `train.py` (train loop)
+  - `inference/plots.py` — plotting utility
   - `utils/` — config, logging, IO, seeding
-- `configs/` — `train_dqn.yaml` and subdirs for future configs
+- `configs/` — Hydra-config tree (`config.yaml`, `env/`, `algo/`, `train/`, `eval/`, `paths/`)
 - `artifacts/` — run outputs (created at runtime)
 - `doc/` — design notes and methodology drafts
 - `tests/` — env/DQN/metrics tests
@@ -116,4 +132,3 @@ Rewards: per-step penalty (−1), large solved bonus (+100), additional terminal
 - Add offline trajectory generation with softmax policy over Q for β estimation.
 - Implement β MLE and evaluation harness for recovery on synthetic datasets.
 - Add FastAPI inference server when needed.
-
