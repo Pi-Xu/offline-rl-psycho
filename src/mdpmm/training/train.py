@@ -114,6 +114,14 @@ def train_dqn(config: TrainDqnConfig) -> None:
                 break
 
         # Per-episode log
+        if config.print_episode and (ep % max(1, config.episode_log_interval) == 0):
+            logger.info(
+                "episode=%d return=%.3f steps=%d epsilon=%.3f",
+                ep,
+                total_r,
+                steps,
+                epsilon,
+            )
         append_jsonl(
             {
                 "episode": ep,
@@ -134,6 +142,14 @@ def train_dqn(config: TrainDqnConfig) -> None:
                 max_steps=config.max_steps_per_episode,
                 seed=seed + 999,
             )
+            if config.print_eval:
+                logger.info(
+                    "eval@ep=%d success_rate=%.3f avg_steps=%.2f avg_return=%.3f",
+                    ep,
+                    eval_stats["success_rate"],
+                    eval_stats["avg_steps"],
+                    eval_stats["avg_return"],
+                )
             append_jsonl({"episode": ep, "kind": "eval", **eval_stats}, metrics_path)
 
             # Save last checkpoint

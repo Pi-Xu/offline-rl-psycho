@@ -7,3 +7,7 @@ eval_every: 50
 seed: 42
 device: cpu
 
+# Console printing (set to true to see logs in terminal)
+print_episode: false
+episode_log_interval: 1
+print_eval: true

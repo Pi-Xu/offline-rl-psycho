@@ -45,6 +45,10 @@ class TrainDqnConfig(BaseModel):
     run_id: Optional[str] = None
     # Optional: if provided (e.g., by Hydra), training will write into this directory directly
     run_dir: Optional[str] = None
+    # Console printing options
+    print_episode: bool = False
+    episode_log_interval: int = 1
+    print_eval: bool = True
 
 
 class AppSettings(BaseSettings):
@@ -112,4 +116,7 @@ def build_train_config_from_hydra(cfg: DictConfig) -> TrainDqnConfig:
         artifacts_dir=artifacts_dir,
         run_id=(str(cfg.run_id) if cfg.get("run_id") is not None else None),
         run_dir=hydra_run_dir,
+        print_episode=bool(getattr(train, "print_episode", False)),
+        episode_log_interval=int(getattr(train, "episode_log_interval", 1)),
+        print_eval=bool(getattr(train, "print_eval", True)),
     )
