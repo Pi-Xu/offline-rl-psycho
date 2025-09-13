@@ -49,6 +49,10 @@ class TrainDqnConfig(BaseModel):
     print_episode: bool = False
     episode_log_interval: int = 1
     print_eval: bool = True
+    # Rendering options
+    render_final_image: bool = True
+    render_gif: bool = False
+    gif_duration_ms: int = 400
 
 
 class AppSettings(BaseSettings):
@@ -119,4 +123,7 @@ def build_train_config_from_hydra(cfg: DictConfig) -> TrainDqnConfig:
         print_episode=bool(getattr(train, "print_episode", False)),
         episode_log_interval=int(getattr(train, "episode_log_interval", 1)),
         print_eval=bool(getattr(train, "print_eval", True)),
+        render_final_image=bool(getattr(train, "render_final_image", True)),
+        render_gif=bool(getattr(train, "render_gif", False)),
+        gif_duration_ms=int(getattr(train, "gif_duration_ms", 400)),
     )

@@ -11,3 +11,8 @@ device: cpu
 print_episode: false
 episode_log_interval: 1
 print_eval: true
+
+# Rendering controls
+render_final_image: true
+render_gif: false
+gif_duration_ms: 400

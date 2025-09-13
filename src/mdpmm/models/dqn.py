@@ -127,3 +127,24 @@ class DQNAgent:
         }
         torch.save(obj, path)
 
+    def load(self, path: str) -> Dict:
+        obj = torch.load(path, map_location=self.device)
+        state = obj.get("model_state", obj)
+        self.q.load_state_dict(state)
+        self.sync_target()
+        return obj.get("meta", {})
+
+    @classmethod
+    def from_checkpoint(
+        cls,
+        path: str,
+        *,
+        obs_dim: int,
+        num_actions: int,
+        lr: float = 3e-4,
+        gamma: float = 0.99,
+        device: str = "cpu",
+    ) -> Tuple["DQNAgent", Dict]:
+        agent = cls(obs_dim, num_actions, lr=lr, gamma=gamma, device=device)
+        meta = agent.load(path)
+        return agent, meta

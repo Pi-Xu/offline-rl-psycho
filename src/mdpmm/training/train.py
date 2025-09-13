@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Dict
+from typing import Dict, List, Tuple
 
 import numpy as np
 
@@ -12,6 +12,22 @@ from mdpmm.utils.config import AppSettings, TrainDqnConfig, materialize_run_dir
 from mdpmm.utils.io import append_jsonl, ensure_dir, save_json
 from mdpmm.utils.logging import setup_logging
 from mdpmm.utils.seeding import set_global_seeds
+import matplotlib
+from io import BytesIO
+try:
+    from PIL import Image
+except Exception:  # pragma: no cover
+    Image = None  # type: ignore
+
+
+def _safe_import_matplotlib_pyplot():
+    try:
+        matplotlib.use("Agg")
+    except Exception:
+        pass
+    import matplotlib.pyplot as plt  # type: ignore
+
+    return plt
 
 
 def linear_epsilon(step: int, start: float, end: float, decay_steps: int) -> float:
@@ -50,6 +66,89 @@ def evaluate(env_id: str, agent: DQNAgent, episodes: int, max_steps: int, seed: 
         "avg_return": float(np.mean(returns) if returns else 0.0),
         "avg_steps": float(np.mean(steps_list) if steps_list else 0.0),
     }
+
+
+def _render_board(
+    valid_mask: np.ndarray, board: np.ndarray, out_path: str, *, title: str = "Final Board"
+) -> None:
+    plt = _safe_import_matplotlib_pyplot()
+    ensure_dir(os.path.dirname(out_path))
+    # Build a color map: -1 invalid, 0 empty valid, 1 peg
+    H, W = valid_mask.shape
+    img = np.full((H, W), -1, dtype=np.int8)
+    img[valid_mask.astype(bool)] = 0
+    img[board.astype(bool)] = 1
+
+    # Colors: invalid=light gray, empty=white, peg=steelblue
+    from matplotlib.colors import ListedColormap
+
+    cmap = ListedColormap(["lightgray", "white", "steelblue"])  # indices: -1->0, 0->1, 1->2
+    # Shift values to [0,2]
+    img_disp = img + 1
+    fig, ax = plt.subplots(figsize=(5, 5))
+    ax.imshow(img_disp, cmap=cmap, vmin=0, vmax=2)
+    ax.set_title(title)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+
+
+def _render_board_frame(
+    valid_mask: np.ndarray,
+    board: np.ndarray,
+    *,
+    title: str,
+    step: int,
+    reward: float,
+    cum_return: float,
+) -> Image | None:
+    plt = _safe_import_matplotlib_pyplot()
+    # Build a color map: -1 invalid, 0 empty valid, 1 peg
+    H, W = valid_mask.shape
+    img = np.full((H, W), -1, dtype=np.int8)
+    img[valid_mask.astype(bool)] = 0
+    img[board.astype(bool)] = 1
+
+    from matplotlib.colors import ListedColormap
+
+    cmap = ListedColormap(["lightgray", "white", "steelblue"])  # indices: -1->0, 0->1, 1->2
+    img_disp = img + 1
+    fig, ax = plt.subplots(figsize=(5, 5))
+    ax.imshow(img_disp, cmap=cmap, vmin=0, vmax=2)
+    ax.set_title(title)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    # Overlay text with reward info
+    ax.text(
+        0.02,
+        0.96,
+        f"Step {step} | r={reward:.2f} | R={cum_return:.2f}",
+        transform=ax.transAxes,
+        fontsize=10,
+        va="top",
+        ha="left",
+        bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"),
+    )
+    fig.tight_layout()
+
+    if Image is None:
+        plt.close(fig)
+        return None
+    buf = BytesIO()
+    fig.savefig(buf, format="png", dpi=150)
+    plt.close(fig)
+    buf.seek(0)
+    try:
+        im = Image.open(buf).convert("RGB")
+        return im
+    finally:
+        buf.close()
 
 
 def train_dqn(config: TrainDqnConfig) -> None:
@@ -167,3 +266,100 @@ def train_dqn(config: TrainDqnConfig) -> None:
 
     # Write final summary
     save_json({"best": best, "last_eval": eval_stats}, os.path.join(run_dir, "summary.json"))
+
+    # Greedy rollout with best checkpoint and optional rendering
+    try:
+        best_path = os.path.join(run_dir, "best.pt")
+        if os.path.exists(best_path) and (config.render_final_image or config.render_gif):
+            env_vis = make_env(config.env_id)
+            obs_dim_vis = int(np.prod(env_vis.obs_shape))
+            agent_vis, meta = DQNAgent.from_checkpoint(
+                best_path,
+                obs_dim=obs_dim_vis,
+                num_actions=env_vis.num_actions,
+                lr=config.lr,
+                gamma=config.gamma,
+                device=config.device,
+            )
+            obs, info = env_vis.reset(seed=seed + 2024)
+            steps: int = 0
+            solved_flag: bool = False
+            frames: List[Image] = [] if (Image is not None and config.render_gif) else []
+            cum_ret: float = 0.0
+            # Initial frame (before any move)
+            if Image is not None and config.render_gif:
+                board0 = obs.reshape(env_vis.valid_mask.shape)
+                f0 = _render_board_frame(
+                    env_vis.valid_mask,
+                    board0,
+                    title="Best Model — Rollout",
+                    step=steps,
+                    reward=0.0,
+                    cum_return=0.0,
+                )
+                if f0 is not None:
+                    frames.append(f0)
+            for _ in range(config.max_steps_per_episode):
+                a = agent_vis.act(obs, legal_mask=info["action_mask"], epsilon=0.0)
+                sr = env_vis.step(a)
+                obs, info = sr.obs, {"action_mask": env_vis.legal_action_mask()}
+                steps += 1
+                cum_ret += float(sr.reward)
+                if Image is not None and config.render_gif:
+                    board_t = obs.reshape(env_vis.valid_mask.shape)
+                    ft = _render_board_frame(
+                        env_vis.valid_mask,
+                        board_t,
+                        title="Best Model — Rollout",
+                        step=steps,
+                        reward=float(sr.reward),
+                        cum_return=cum_ret,
+                    )
+                    if ft is not None:
+                        frames.append(ft)
+                if sr.done:
+                    solved_flag = bool(sr.info.get("solved", False))
+                    break
+            # Reconstruct board from observation
+            HxW = env_vis.obs_shape[0]
+            H = W = int(np.sqrt(HxW)) if int(np.sqrt(HxW)) ** 2 == HxW else None
+            if H is None:
+                # Use valid_mask shape if non-square
+                valid_mask = env_vis.valid_mask
+                board = obs.reshape(valid_mask.shape)
+            else:
+                valid_mask = env_vis.valid_mask
+                board = obs.reshape(valid_mask.shape)
+            if config.render_final_image:
+                out_img = os.path.join(run_dir, "best_inference.png")
+                _render_board(valid_mask, board, out_img, title="Best Model — Final Board")
+            else:
+                out_img = ""
+            # Save a small JSON record
+            save_json(
+                {
+                    "steps": steps,
+                    "solved": solved_flag,
+                    "meta": meta,
+                    "checkpoint": os.path.basename(best_path),
+                    "image": os.path.basename(out_img),
+                },
+                os.path.join(run_dir, "best_inference.json"),
+            )
+            # Save GIF video if possible
+            if config.render_gif and Image is not None and frames:
+                gif_path = os.path.join(run_dir, "best_inference.gif")
+                try:
+                    frames[0].save(
+                        gif_path,
+                        save_all=True,
+                        append_images=frames[1:],
+                        duration=max(10, int(config.gif_duration_ms)),  # ms per frame
+                        loop=0,
+                        optimize=True,
+                    )
+                except Exception:
+                    pass
+    except Exception:
+        # Rendering should not break training runs
+        pass

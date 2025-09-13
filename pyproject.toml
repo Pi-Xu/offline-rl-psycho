@@ -13,6 +13,7 @@ dependencies = [
     "hydra-core>=1.3",
     "torch>=2.1; extra == 'cpu'",
     "matplotlib>=3.7",
+    "pillow>=9.0",
 ]
 
 [tool.uv]
