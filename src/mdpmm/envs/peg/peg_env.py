@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 import numpy as np
 
@@ -61,6 +61,7 @@ class PegSolEnv:
         *,
         valid_mask: np.ndarray | None = None,
         initial_empty: Tuple[int, int] | None = None,
+        initial_empty_choices: Optional[List[Tuple[int, int]]] = None,
         step_penalty: float = -1.0,
         solved_bonus: float = 100.0,
         unsolved_penalty_per_peg: float = 5.0,
@@ -77,6 +78,17 @@ class PegSolEnv:
             self._initial_empty = (H // 2, W // 2)
         else:
             self._initial_empty = initial_empty
+        # Optional: a set of allowed initial empty coordinates to sample from at reset
+        self._initial_empty_choices: Optional[List[Tuple[int, int]]] = None
+        if initial_empty_choices is not None:
+            # Validate provided choices fall within bounds and valid cells
+            validated: List[Tuple[int, int]] = []
+            for r, c in initial_empty_choices:
+                if 0 <= r < H and 0 <= c < W and self.valid_mask[r, c] == 1:
+                    validated.append((r, c))
+            if not validated:
+                raise ValueError("initial_empty_choices has no valid positions on the board")
+            self._initial_empty_choices = validated
         # Reward shaping parameters
         self.step_penalty = float(step_penalty)
         self.solved_bonus = float(solved_bonus)
@@ -87,8 +99,12 @@ class PegSolEnv:
         if seed is not None:
             np.random.seed(seed)
         board = self.valid_mask.astype(np.int8)
-        # initial empty
-        r0, c0 = self._initial_empty
+        # initial empty (optionally sampled from allowed choices)
+        if self._initial_empty_choices is not None and len(self._initial_empty_choices) > 0:
+            idx = np.random.randint(0, len(self._initial_empty_choices))
+            r0, c0 = self._initial_empty_choices[idx]
+        else:
+            r0, c0 = self._initial_empty
         if 0 <= r0 < board.shape[0] and 0 <= c0 < board.shape[1]:
             board[r0, c0] = 0
         self._board = board

@@ -9,7 +9,13 @@ import numpy as np
 _REGISTRY: Dict[str, Callable[[], PegSolEnv]] = {
     "peg7x7": lambda: PegSolEnv(),
     # Smaller 4x4 grid variant for faster experimentation
-    "peg4x4": lambda: PegSolEnv(valid_mask=np.ones((4, 4), dtype=np.int8)),
+    # Initial empty is sampled from edge midpoints: (0,1),(0,2),(1,0),(1,3),(2,0),(2,3),(3,1),(3,2)
+    "peg4x4": lambda: PegSolEnv(
+        valid_mask=np.ones((4, 4), dtype=np.int8),
+        initial_empty_choices=[
+            (0, 1), (0, 2), (1, 0), (1, 3), (2, 0), (2, 3), (3, 1), (3, 2)
+        ],
+    ),
 }
 
 
