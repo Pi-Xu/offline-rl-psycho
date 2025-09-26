@@ -73,7 +73,7 @@ Saved under `artifacts/models/peg/dqn/<run_id>/`:
 
 - `config.json` — resolved training config
 - `metrics.jsonl` — per-step/episode/eval records
-- `last.pt`, `best.pt` — model checkpoints (with meta)
+- `last.pt`, `best.pt` — model checkpoints (with meta). `best.pt` is selected by highest average return (tie-breakers: higher success rate, then fewer avg steps).
 - `summary.json` — best and last eval summary
 
 ## Plot Metrics

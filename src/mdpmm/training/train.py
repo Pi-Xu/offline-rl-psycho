@@ -168,7 +168,8 @@ def train_dqn(config: TrainDqnConfig) -> None:
     buf = ReplayBuffer(config.replay_capacity)
 
     metrics_path = os.path.join(run_dir, "metrics.jsonl")
-    best = {"success_rate": -1.0, "avg_steps": float("inf")}
+    # Track best by highest avg_return; tie-break by higher success_rate, then fewer avg_steps
+    best = {"avg_return": float("-inf"), "success_rate": -1.0, "avg_steps": float("inf")}
     global_step = 0
     eval_stats = {}
 
@@ -255,12 +256,24 @@ def train_dqn(config: TrainDqnConfig) -> None:
             last_path = os.path.join(run_dir, "last.pt")
             agent.save(last_path, meta={"episode": ep, **eval_stats})
 
-            # Track best (by success_rate then shorter avg_steps)
-            is_better = (eval_stats["success_rate"] > best["success_rate"]) or (
-                eval_stats["success_rate"] == best["success_rate"] and eval_stats["avg_steps"] < best["avg_steps"]
-            )
+            # Track best by avg_return; tie-break by success_rate, then shorter avg_steps
+            if eval_stats["avg_return"] > best["avg_return"]:
+                is_better = True
+            elif eval_stats["avg_return"] == best["avg_return"]:
+                if eval_stats["success_rate"] > best["success_rate"]:
+                    is_better = True
+                elif eval_stats["success_rate"] == best["success_rate"]:
+                    is_better = eval_stats["avg_steps"] < best["avg_steps"]
+                else:
+                    is_better = False
+            else:
+                is_better = False
             if is_better:
-                best = {"success_rate": eval_stats["success_rate"], "avg_steps": eval_stats["avg_steps"]}
+                best = {
+                    "avg_return": eval_stats["avg_return"],
+                    "success_rate": eval_stats["success_rate"],
+                    "avg_steps": eval_stats["avg_steps"],
+                }
                 best_path = os.path.join(run_dir, "best.pt")
                 agent.save(best_path, meta={"episode": ep, **eval_stats})
 
