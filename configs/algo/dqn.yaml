@@ -12,3 +12,7 @@ epsilon:
   end: 0.05
   decay_steps: 50000
 
+# Q-network architecture
+model_type: mlp  # options: mlp, cnn
+# cnn_channels: [16, 32]   # uncomment when model_type=cnn
+# cnn_hidden: 256          # fc hidden after GAP when model_type=cnn

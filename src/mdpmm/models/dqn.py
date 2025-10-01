@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Deque, Dict, List, Tuple
+from typing import Deque, Dict, List, Tuple, Optional, Sequence
 
 import numpy as np
 import torch
@@ -18,6 +18,46 @@ class MLPQ(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.net(x)
+
+
+class ConvQ(nn.Module):
+    """A light-weight convolutional Q-network.
+
+    - Expects a flattened observation of shape [B, H*W].
+    - Reshapes to [B, 1, H, W] and applies a small Conv stack.
+    - Uses global average pooling to avoid depending on exact spatial sizes.
+    """
+
+    def __init__(
+        self,
+        in_hw: Tuple[int, int],
+        out_dim: int,
+        channels: Sequence[int] = (16, 32),
+        hidden: int = 256,
+    ) -> None:
+        super().__init__()
+        assert len(channels) >= 2, "channels should have at least two elements"
+        c1, c2 = int(channels[0]), int(channels[1])
+        self.h, self.w = int(in_hw[0]), int(in_hw[1])
+        self.features = nn.Sequential(
+            nn.Conv2d(1, c1, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(c1, c2, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+        )
+        self.pool = nn.AdaptiveAvgPool2d((1, 1))
+        self.head = nn.Sequential(
+            nn.Linear(c2, hidden), nn.ReLU(inplace=True), nn.Linear(hidden, out_dim)
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: [B, H*W]
+        b = x.shape[0]
+        x_img = x.view(b, 1, self.h, self.w)
+        feat = self.features(x_img)
+        pooled = self.pool(feat).view(b, -1)  # [B, C]
+        q = self.head(pooled)
+        return q
 
 
 @dataclass
@@ -71,14 +111,31 @@ class DQNAgent:
         lr: float = 3e-4,
         gamma: float = 0.99,
         device: str = "cpu",
+        *,
+        model_type: str = "mlp",
+        obs_shape: Optional[Tuple[int, int]] = None,
+        cnn_channels: Sequence[int] = (16, 32),
+        cnn_hidden: int = 256,
     ):
         self.device = torch.device(device)
-        self.q = MLPQ(obs_dim, num_actions).to(self.device)
-        self.q_target = MLPQ(obs_dim, num_actions).to(self.device)
+        model_type = (model_type or "mlp").lower()
+        if model_type == "cnn":
+            if obs_shape is None:
+                raise ValueError("obs_shape=(H,W) must be provided when model_type='cnn'")
+            self.q = ConvQ(obs_shape, num_actions, channels=cnn_channels, hidden=cnn_hidden).to(
+                self.device
+            )
+            self.q_target = ConvQ(obs_shape, num_actions, channels=cnn_channels, hidden=cnn_hidden).to(
+                self.device
+            )
+        else:
+            self.q = MLPQ(obs_dim, num_actions).to(self.device)
+            self.q_target = MLPQ(obs_dim, num_actions).to(self.device)
         self.q_target.load_state_dict(self.q.state_dict())
         self.optim = torch.optim.Adam(self.q.parameters(), lr=lr)
         self.gamma = gamma
         self.num_actions = num_actions
+        self.model_type = model_type
 
     @torch.no_grad()
     def act(self, obs: np.ndarray, legal_mask: np.ndarray, epsilon: float) -> int:
@@ -144,7 +201,21 @@ class DQNAgent:
         lr: float = 3e-4,
         gamma: float = 0.99,
         device: str = "cpu",
+        model_type: str = "mlp",
+        obs_shape: Optional[Tuple[int, int]] = None,
+        cnn_channels: Sequence[int] = (16, 32),
+        cnn_hidden: int = 256,
     ) -> Tuple["DQNAgent", Dict]:
-        agent = cls(obs_dim, num_actions, lr=lr, gamma=gamma, device=device)
+        agent = cls(
+            obs_dim,
+            num_actions,
+            lr=lr,
+            gamma=gamma,
+            device=device,
+            model_type=model_type,
+            obs_shape=obs_shape,
+            cnn_channels=cnn_channels,
+            cnn_hidden=cnn_hidden,
+        )
         meta = agent.load(path)
         return agent, meta

@@ -53,6 +53,10 @@ class TrainDqnConfig(BaseModel):
     render_final_image: bool = True
     render_gif: bool = False
     gif_duration_ms: int = 400
+    # Model
+    model_type: str = "mlp"  # one of {mlp, cnn}
+    cnn_channels: tuple[int, int] = (16, 32)
+    cnn_hidden: int = 256
 
 
 class AppSettings(BaseSettings):
@@ -100,6 +104,21 @@ def build_train_config_from_hydra(cfg: DictConfig) -> TrainDqnConfig:
     except Exception:
         hydra_run_dir = None
 
+    # Optional model options
+    algo_model_type = str(getattr(algo, "model_type", "mlp")).lower()
+    def _get_tuple2(x, default: tuple[int, int]) -> tuple[int, int]:
+        try:
+            if x is None:
+                return default
+            if isinstance(x, (list, tuple)) and len(x) >= 2:
+                return (int(x[0]), int(x[1]))
+        except Exception:
+            pass
+        return default
+
+    cnn_channels = _get_tuple2(getattr(algo, "cnn_channels", None), (16, 32))
+    cnn_hidden = int(getattr(algo, "cnn_hidden", 256))
+
     return TrainDqnConfig(
         env_id=env_id,
         max_steps_per_episode=int(train.max_steps_per_episode),
@@ -126,4 +145,7 @@ def build_train_config_from_hydra(cfg: DictConfig) -> TrainDqnConfig:
         render_final_image=bool(getattr(train, "render_final_image", True)),
         render_gif=bool(getattr(train, "render_gif", False)),
         gif_duration_ms=int(getattr(train, "gif_duration_ms", 400)),
+        model_type=algo_model_type,
+        cnn_channels=cnn_channels,
+        cnn_hidden=cnn_hidden,
     )

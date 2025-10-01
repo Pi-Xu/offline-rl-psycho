@@ -67,6 +67,25 @@ Config files live under `configs/`:
 Hydra supports overrides for any key, e.g. `algo.lr=1e-3 train.device=cuda`.
 
 
+### Use a CNN Q-network
+
+The default Q-network is an MLP. A lightweight CNN is also available and works for both 7x7 and 4x4 boards (single-channel; no extra mask inputs required).
+
+- Switch via Hydra group:
+
+```bash
+python -m mdpmm.training.hydra_train algo=dqn_cnn
+```
+
+- Or override fields explicitly:
+
+```bash
+python -m mdpmm.training.hydra_train algo.model_type=cnn algo.cnn_channels='[16,32]' algo.cnn_hidden=256
+```
+
+Internally, the CNN reshapes the flattened observation `[H*W]` to `[1,H,W]`, applies a small Conv stack with global average pooling, then a linear head to action values.
+
+
 
 ## Artifacts
 Saved under `artifacts/models/peg/dqn/<run_id>/`:

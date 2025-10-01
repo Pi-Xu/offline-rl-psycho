@@ -1,0 +1,16 @@
+gamma: 0.99
+lr: 0.0003
+batch_size: 128
+replay_capacity: 50000
+learning_starts: 1000
+target_update_interval: 1000
+
+epsilon:
+  start: 1.0
+  end: 0.05
+  decay_steps: 50000
+
+model_type: cnn
+cnn_channels: [16, 32]
+cnn_hidden: 256
+

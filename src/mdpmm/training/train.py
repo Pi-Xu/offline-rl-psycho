@@ -164,7 +164,17 @@ def train_dqn(config: TrainDqnConfig) -> None:
     env = make_env(config.env_id)
     obs_dim = int(np.prod(env.obs_shape))
     num_actions = env.num_actions
-    agent = DQNAgent(obs_dim, num_actions, lr=config.lr, gamma=config.gamma, device=config.device)
+    agent = DQNAgent(
+        obs_dim,
+        num_actions,
+        lr=config.lr,
+        gamma=config.gamma,
+        device=config.device,
+        model_type=config.model_type,
+        obs_shape=env.valid_mask.shape,
+        cnn_channels=tuple(config.cnn_channels),
+        cnn_hidden=int(config.cnn_hidden),
+    )
     buf = ReplayBuffer(config.replay_capacity)
 
     metrics_path = os.path.join(run_dir, "metrics.jsonl")
@@ -293,6 +303,10 @@ def train_dqn(config: TrainDqnConfig) -> None:
                 lr=config.lr,
                 gamma=config.gamma,
                 device=config.device,
+                model_type=config.model_type,
+                obs_shape=env_vis.valid_mask.shape,
+                cnn_channels=tuple(config.cnn_channels),
+                cnn_hidden=int(config.cnn_hidden),
             )
             obs, info = env_vis.reset(seed=seed + 2024)
             steps: int = 0
