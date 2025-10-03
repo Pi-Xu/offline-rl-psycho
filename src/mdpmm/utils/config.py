@@ -59,6 +59,45 @@ class TrainDqnConfig(BaseModel):
     cnn_hidden: int = 256
 
 
+class GenerateDataConfig(BaseModel):
+    # Model / env
+    env_id: str = "peg7x7"
+    # Either provide `checkpoint_path` directly, or point to a training `run_dir`
+    checkpoint_path: Optional[str] = None
+    run_dir: Optional[str] = None  # if set, uses `${run_dir}/best.pt` by default
+    device: str = "cpu"
+    # Rollout settings
+    participants: int = 50  # number of synthetic participants (j)
+    episodes_per_participant: int = 2  # number of episodes per participant
+    max_steps_per_episode: int = 150
+    seed: int = 42
+    # Beta generation
+    beta_mode: str = "lognormal"  # one of {lognormal, fixed}
+    # log(beta) ~ N(mu, sigma^2)
+    beta_mu: float = 0.0
+    beta_sigma: float = 0.5
+    # If fixed, use this value for all participants
+    beta_fixed: float = 1.0
+    # Output
+    out_dir: str = "artifacts/datasets/synth"
+    out_name: Optional[str] = None  # if None, auto from timestamp
+    # Model architecture hints for restoring agent (should match training)
+    model_type: str = "mlp"  # {mlp, cnn}
+    cnn_channels: tuple[int, int] = (16, 32)
+    cnn_hidden: int = 256
+
+    def resolve_checkpoint(self) -> str:
+        """Choose checkpoint file based on fields, prefer explicit path."""
+        from pathlib import Path
+
+        if self.checkpoint_path:
+            return str(Path(self.checkpoint_path).expanduser())
+        if self.run_dir:
+            p = Path(self.run_dir) / "best.pt"
+            return str(p)
+        raise ValueError("Provide either `checkpoint_path` or `run_dir` to locate best.pt")
+
+
 class AppSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

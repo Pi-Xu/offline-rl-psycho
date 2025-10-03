@@ -120,6 +120,7 @@ Outputs PNGs in `<run_id>/plots/`:
   - `models/` — `dqn.py` (MLP Q-network, replay buffer, agent)
   - `training/` — `hydra_train.py` (Hydra entrypoint), `train.py` (train loop)
   - `inference/plots.py` — plotting utility
+  - `inference/generate.py` — generate offline trajectories from a checkpoint using softmax policy
   - `utils/` — config, logging, IO, seeding
 - `configs/` — Hydra-config tree (`config.yaml`, `env/`, `algo/`, `train/`, `eval/`, `paths/`)
 - `artifacts/` — run outputs (created at runtime)
@@ -148,6 +149,46 @@ Rewards: per-step penalty (−1), large solved bonus (+100), additional terminal
 - For background and model motivation, see docs in `doc/`.
 
 ## Roadmap (optional)
-- Add offline trajectory generation with softmax policy over Q for β estimation.
+- Add β estimation (MLE/EM) and evaluation harness for recovery on synthetic datasets.
+
+## Generate Offline Data (β-aware)
+
+Use a trained checkpoint (e.g., `best.pt`) to roll out trajectories with a softmax policy
+π(a|s,β) ∝ exp{β Q(s,a)} over legal actions. This simulates participants with different decisiveness β.
+
+CLI:
+
+```bash
+python -m mdpmm.inference.generate \
+  --run-dir artifacts/models/peg/dqn/<run_id> \
+  --participants 50 --episodes-per-participant 2 \
+  --beta-mode lognormal --beta-mu 0.0 --beta-sigma 0.5 \
+  --out-dir artifacts/datasets/synth --out-name demo
+```
+
+Or pass `--checkpoint-path <path/to/best.pt>` directly. Output files:
+
+- `manifest.json` — config, β distribution, and checkpoint meta
+- `trajectories.jsonl` — one record per transition with fields:
+  `pid, episode, t, beta, s, a, r, ns, done, legal_s, legal_ns`.
+
+Determinism: set `--seed` (also supported via `.env` SEED for defaults).
+
+## Dataset Statistics
+
+Given a generated dataset directory (containing `trajectories.jsonl` and `manifest.json`),
+compute a beta histogram, per-participant average steps per episode, and a scatter plot of
+beta vs. average steps:
+
+```bash
+python -m mdpmm.inference.stats \
+  --dataset-dir artifacts/datasets/synth/<out_name>
+```
+
+Outputs to `<out_name>/plots/`:
+- `participant_stats.csv` — columns: `pid,beta,episodes,avg_steps`
+- `beta_hist.png` — histogram of betas
+- `scatter_beta_vs_avg_steps.png` — scatter of beta vs avg steps
+- `summary.json` — simple numeric summary
 - Implement β MLE and evaluation harness for recovery on synthetic datasets.
 - Add FastAPI inference server when needed.
