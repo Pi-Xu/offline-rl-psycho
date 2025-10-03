@@ -192,3 +192,39 @@ Outputs to `<out_name>/plots/`:
 - `summary.json` — simple numeric summary
 - Implement β MLE and evaluation harness for recovery on synthetic datasets.
 - Add FastAPI inference server when needed.
+
+## Beta–Q Estimation (psycho‑RL)
+
+Estimate individual inverse temperatures (β) and a shared Q(s,a) from offline trajectories, following `doc/25_08_23_rl4psycho.md`. This implementation alternates:
+
+- E-step: update per-participant β via 1D Newton on z=log β given current Q.
+- M-step: update Q by minimizing behavior NLL with optional soft Bellman consistency (uses logged rewards r) and a light CQL term.
+
+CLI:
+
+```bash
+python -m mdpmm.inference.estimate_beta_q \
+  --dataset-dir artifacts/datasets/<name>/<run> \
+  --rounds 3 --steps-per-round 200 \
+  --lambda-bell 0.5 --lambda-cql 0.1 --gamma 0.99 --tau 1.0 \
+  --beta-mu 0.0 --beta-sigma 0.5
+```
+
+Outputs in `artifacts/estimates/<timestamp>/`:
+- `q.pt` — PyTorch state dict and metadata for the learned Q network
+- `beta_estimates.json` — mapping `{pid: beta}` and the beta prior used
+- `manifest.json` — run metadata
+
+Data format reminder (one JSON per step):
+
+```json
+{"pid": 0, "episode": 0, "t": 0, "beta": 1.23,
+ "s": [..], "a": 12, "r": -1.0,
+ "ns": [..], "done": false,
+ "legal_s": [true/false per action],
+ "legal_ns": [true/false per action]}
+```
+
+Notes:
+- This version does not perform inverse RL; it uses the logged reward `r` for the Bellman term. Set `--lambda-bell 0` to disable consistency if desired.
+- Identification relies on the prior over β and the regularizers; very large λ can over-constrain Q.
