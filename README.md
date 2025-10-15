@@ -102,6 +102,12 @@ Render per-episode and eval plots from a run directory:
 python -m mdpmm.inference.plots --run-dir artifacts/models/peg/dqn/<run_id>
 ```
 
+Alternatively, use the helper shell script (wraps the command above):
+
+```bash
+scripts/render_plots.sh --run-dir artifacts/models/peg/dqn/<run_id> --out-dir plots
+```
+
 Outputs PNGs in `<run_id>/plots/`:
 
 - `episode_return.png`, `episode_steps.png`, `episode_epsilon.png`
