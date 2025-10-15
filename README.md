@@ -135,6 +135,35 @@ pytest -q
 ruff check . && black --check . && mypy src
 ```
 
+## Debugging Without Installing
+
+You can debug without `pip install -e .` by using the helper script that prepends `src/` to `sys.path`:
+
+```bash
+python scripts/estimation_debug.py --dataset-dir artifacts/datasets/synth/<name>
+```
+
+Options:
+- `--trace-pids K` prints Newton traces for the first K participants: objective, gradient g, Hessian H, z/log-beta.
+- `--run-estimator` launches the full estimator with `debug` logs enabled, printing loss decomposition (NLL/Bellman/CQL).
+
+The script modifies `sys.path` at runtime so you can iterate without reinstalling.
+
+## Beta Recovery Evaluation
+
+Given a dataset with ground-truth betas and an estimation run directory, evaluate recovery quality:
+
+```bash
+python scripts/eval_beta_recovery.py \
+  --dataset-dir artifacts/datasets/synth/<name> \
+  --estimates-dir artifacts/estimates/<run_id>
+```
+
+Outputs under `<estimates-dir>/eval/` (or `--out-dir`):
+- `beta_recovery.csv` — per-pid table: `pid,beta_true,beta_hat,abs_err,rel_err`
+- `metrics.json` — `pearson_r`, `spearman_r`, `mae`, `mape`, counts
+- `scatter_true_vs_hat.png` and `error_hist.png` (unless `--no-plots`)
+
 ## Environments
 - `peg7x7` — standard English cross board (center empty by default)
 - `peg4x4` — compact variant for fast iteration

@@ -16,6 +16,7 @@ import json
 import math
 import os
 from dataclasses import dataclass
+import logging
 from typing import Dict, Iterable, List, Tuple
 
 import numpy as np
@@ -24,6 +25,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from mdpmm.utils.seeding import set_global_seeds
+from mdpmm.utils.logging import setup_logging
 
 
 # -------------------------------
@@ -152,6 +154,10 @@ def _e_step_newton(
     z_init: float | None = None,
     max_iter: int = 10,
     tol: float = 1e-6,
+    *,
+    line_search: bool = True,
+    z_min: float = math.log(1e-3),
+    z_max: float = math.log(1e3),
 ) -> float:
     """Maximize participant j's log posterior over z=log beta using Newton steps.
 
@@ -167,6 +173,15 @@ def _e_step_newton(
     mj = mask[indices]  # [T, A]
 
     z = float(prior.mu if z_init is None else z_init)
+
+    def _obj(zv: float) -> float:
+        beta_ = math.exp(zv)
+        logits_ = beta_ * qj
+        lse_ = masked_logsumexp(logits_, mj, dim=-1)
+        chosen_ = logits_.gather(1, aj.view(-1, 1)).squeeze(1)
+        lp_ = torch.sum(chosen_ - lse_).item()
+        prior_term_ = -0.5 * ((zv - prior.mu) ** 2) / (prior.sigma**2)
+        return float(lp_ + prior_term_)
 
     for _ in range(max_iter):
         beta = math.exp(z)
@@ -190,7 +205,28 @@ def _e_step_newton(
             H = -max(1.0, abs(g))
 
         step = g / H
-        z_new = z - step
+        z_prop = z - step
+        # Clamp to reasonable range to avoid extreme betas
+        z_prop = max(z_min, min(z_max, z_prop))
+
+        if not line_search:
+            if abs(z_prop - z) < tol:
+                z = z_prop
+                break
+            z = z_prop
+            continue
+
+        # Backtracking line search to guarantee non-decreasing objective
+        obj0 = _obj(z)
+        z_new = z_prop
+        tries = 0
+        while tries < 10:
+            obj_new = _obj(z_new)
+            if math.isfinite(obj_new) and obj_new >= obj0 - 1e-10:
+                break
+            # shrink towards current z
+            z_new = z + 0.5 * (z_new - z)
+            tries += 1
         if abs(z_new - z) < tol:
             z = z_new
             break
@@ -239,6 +275,13 @@ class EstimatorConfig:
     beta_sigma: float = 0.5
     # Model
     hidden: int = 128
+    # Debug / numerical options
+    debug: bool = False
+    line_search: bool = True
+    max_newton_iter: int = 10
+    newton_tol: float = 1e-6
+    beta_min: float = 1e-3
+    beta_max: float = 1e3
 
 
 def behavior_nll(q: torch.Tensor, a: torch.Tensor, legal: torch.Tensor, beta_per_row: torch.Tensor) -> torch.Tensor:
@@ -267,6 +310,7 @@ def soft_bellman_residual(q_s: torch.Tensor, q_ns: torch.Tensor, r: torch.Tensor
 
 
 def estimate_beta_q(cfg: EstimatorConfig) -> str:
+    logger = setup_logging(name="mdpmm.estimation")
     set_global_seeds(cfg.seed)
     device = torch.device(cfg.device)
 
@@ -289,11 +333,33 @@ def estimate_beta_q(cfg: EstimatorConfig) -> str:
             mask = mask | (batch.pid == int(p))
         return torch.nonzero(mask, as_tuple=False).squeeze(1)
 
+    logger.info(
+        "Loaded dataset: N=%d, state_dim=%d, actions=%d, participants=%d",
+        int(N), int(s_dim), int(a_dim), len(pid_index),
+    )
+
     for rd in range(cfg.rounds):
         # E-step: update betas for all participants using current Q
         with torch.no_grad():
             q_all = model(batch.s)  # [N, A]
-        betas = update_betas_for_all(q_all, batch.a, batch.legal_s, pid_index, prior=prior, z0=prior.mu)
+        betas = update_betas_for_all(
+            q_all,
+            batch.a,
+            batch.legal_s,
+            pid_index,
+            prior=prior,
+            z0=prior.mu,
+        )
+        if cfg.debug:
+            finite = [b for b in betas.values() if math.isfinite(b)]
+            logger.info(
+                "Round %d E-step: beta mean=%.4f std=%.4f min=%.4f max=%.4f",
+                rd,
+                float(np.mean(finite)) if finite else float("nan"),
+                float(np.std(finite)) if finite else float("nan"),
+                float(np.min(finite)) if finite else float("nan"),
+                float(np.max(finite)) if finite else float("nan"),
+            )
 
         # M-step: optimize Q with fixed betas
         for step in range(cfg.steps_per_round):
@@ -324,6 +390,16 @@ def estimate_beta_q(cfg: EstimatorConfig) -> str:
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
             opt.step()
+            if cfg.debug and (step % 50 == 0):
+                logger.info(
+                    "Round %d step %d | loss=%.4f nll=%.4f bell=%.4f cql=%.4f",
+                    rd,
+                    step,
+                    float(loss.item()),
+                    float(nll.item()),
+                    float(bell.item()),
+                    float(cql.item()),
+                )
 
     # Final E-step for reporting
     with torch.no_grad():
@@ -356,6 +432,7 @@ def estimate_beta_q(cfg: EstimatorConfig) -> str:
         "tau": cfg.tau,
         "state_dim": s_dim,
         "num_actions": a_dim,
+        "debug": cfg.debug,
     }
     with open(os.path.join(run_dir, "manifest.json"), "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2)
@@ -407,4 +484,3 @@ def main() -> None:  # pragma: no cover (thin CLI)
 
 if __name__ == "__main__":  # pragma: no cover
     main()
-
