@@ -139,6 +139,15 @@ def evaluate_beta_recovery(true_betas: Dict[int, float], est_betas: Dict[int, fl
     abs_err = np.array([r.abs_err for r in rows], dtype=float)
     rel_err = np.array([r.rel_err for r in rows if math.isfinite(r.rel_err)], dtype=float)
 
+    if len(rows) >= 2:
+        denom = float(((x - x.mean()) ** 2).sum())
+        if denom > 0:
+            r2 = float(1.0 - ((y - x) ** 2).sum() / denom)
+        else:
+            r2 = float("nan")
+    else:
+        r2 = float("nan")
+
     metrics = {
         "n_true": len(true_betas),
         "n_est": len(est_betas),
@@ -148,6 +157,7 @@ def evaluate_beta_recovery(true_betas: Dict[int, float], est_betas: Dict[int, fl
         "mae": float(abs_err.mean()) if len(rows) > 0 else float("nan"),
         "mape": float(rel_err.mean()) if rel_err.size > 0 else float("nan"),
         "median_abs_err": float(np.median(abs_err)) if len(rows) > 0 else float("nan"),
+        "r2": r2,
     }
     return rows, metrics
 
@@ -202,9 +212,11 @@ def save_beta_recovery_results(out_dir: str, rows: List[BetaEvalRow], metrics: d
             ax.set_ylabel("beta (estimated)")
             ax.set_title("Beta Recovery")
             fig.tight_layout()
-            fig.savefig(sc_path, dpi=150)
+            fig.savefig(sc_path, dpi=300)
+            fig.savefig(sc_path.replace(".png", ".pdf"))
             plt.close(fig)
             paths["scatter"] = sc_path
+            paths["scatter_pdf"] = sc_path.replace(".png", ".pdf")
 
             # Error histogram
             eh_path = os.path.join(out_dir, "error_hist.png")
@@ -214,9 +226,11 @@ def save_beta_recovery_results(out_dir: str, rows: List[BetaEvalRow], metrics: d
             ax.set_ylabel("count")
             ax.set_title("Absolute Error Histogram")
             fig.tight_layout()
-            fig.savefig(eh_path, dpi=150)
+            fig.savefig(eh_path, dpi=300)
+            fig.savefig(eh_path.replace(".png", ".pdf"))
             plt.close(fig)
             paths["error_hist"] = eh_path
+            paths["error_hist_pdf"] = eh_path.replace(".png", ".pdf")
         except Exception:
             pass
 

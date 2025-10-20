@@ -14,6 +14,7 @@ Usage:
 """
 
 import argparse
+import math
 import os
 import sys
 
@@ -71,12 +72,14 @@ def main() -> None:
         ax.set_title(title)
         r = metrics.get("pearson_r")
         rho = metrics.get("spearman_r")
-        try:
-            txt = f"r = {r:.3f}\n = {rho:.3f}"  # placeholder, will overwrite below if fails
-        except Exception:
-            txt = f"r = {r}\nrho = {rho}"
-        # Render annotation at top-left inside axes
-        txt = f"r = {r:.3f}  |  rho = {rho:.3f}" if isinstance(r, (int, float)) and isinstance(rho, (int, float)) else f"r = {r}  |  rho = {rho}"
+        r2 = metrics.get("r2")
+
+        def _fmt(val: object) -> str:
+            if isinstance(val, (int, float)) and math.isfinite(val):
+                return f"{val:.3f}"
+            return "nan"
+
+        txt = f"r = {_fmt(r)}  |  rho = {_fmt(rho)}  |  R² = {_fmt(r2)}"
         ax.text(
             0.02,
             0.98,
@@ -88,9 +91,12 @@ def main() -> None:
             bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"),
         )
         fig.tight_layout()
-        fig.savefig(sc_path, dpi=150)
+        fig.savefig(sc_path, dpi=300)
+        pdf_path = sc_path.replace(".png", ".pdf")
+        fig.savefig(pdf_path)
         plt.close(fig)
         paths["scatter"] = sc_path
+        paths["scatter_pdf"] = pdf_path
 
         # Absolute error histogram (no annotation needed here)
         eh_path = os.path.join(out_dir, "error_hist.png")
@@ -100,9 +106,12 @@ def main() -> None:
         ax.set_ylabel("count")
         ax.set_title("Absolute Error Histogram")
         fig.tight_layout()
-        fig.savefig(eh_path, dpi=150)
+        fig.savefig(eh_path, dpi=300)
+        eh_pdf_path = eh_path.replace(".png", ".pdf")
+        fig.savefig(eh_pdf_path)
         plt.close(fig)
         paths["error_hist"] = eh_path
+        paths["error_hist_pdf"] = eh_pdf_path
 
     for k, v in paths.items():
         print(f"{k}: {v}")

@@ -17,7 +17,7 @@ import math
 import os
 from dataclasses import dataclass
 import logging
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable, List, Tuple, Optional
 
 import numpy as np
 import torch
@@ -145,8 +145,57 @@ class BetaPrior:
     sigma: float = 0.5
 
 
+def advantage_from_q(
+    q: torch.Tensor,
+    legal: torch.Tensor,
+    *,
+    normalize: str = "meanstd",
+    eps: float = 1e-6,
+    clamp: Optional[float] = None,
+) -> torch.Tensor:
+    """Convert Q logits to an advantage form over legal actions.
+
+    Args:
+        q: [N, A] unnormalized action values.
+        legal: [N, A] bool mask indicating available actions.
+        normalize: one of {"none", "mean", "meanstd"}.
+            - "none": return masked Q (no centering).
+            - "mean": subtract per-state mean over legal actions.
+            - "meanstd": subtract mean and divide by per-state std (clamped by eps).
+        eps: lower bound applied to the per-state standard deviation.
+        clamp: if provided, clip normalized logits into [-clamp, clamp].
+
+    Returns:
+        Tensor of logits with illegal actions zeroed out so downstream masked
+        softmax ignores them.
+    """
+    if normalize not in {"none", "mean", "meanstd"}:
+        raise ValueError(f"normalize must be one of 'none', 'mean', 'meanstd'; got {normalize}")
+
+    mask = legal.to(dtype=q.dtype)
+    masked_q = torch.where(legal, q, torch.zeros_like(q))
+    counts = mask.sum(dim=-1, keepdim=True).clamp_min(1.0)
+
+    if normalize == "none":
+        return masked_q
+
+    mean = (masked_q.sum(dim=-1, keepdim=True) / counts)
+    diff = torch.where(legal, q - mean, torch.zeros_like(q))
+    if normalize == "mean":
+        out = diff
+        return torch.clamp(out, min=-clamp, max=clamp) if clamp is not None else out
+
+    var = ((diff**2) * mask).sum(dim=-1, keepdim=True) / counts
+    # Clamp variance before sqrt to keep gradients finite when only one action is legal.
+    var = torch.clamp(var, min=eps**2)
+    std = torch.sqrt(var)
+    scale = torch.maximum(std, torch.full_like(std, eps))
+    out = diff / scale
+    return torch.clamp(out, min=-clamp, max=clamp) if clamp is not None else out
+
+
 def _e_step_newton(
-    q_all: torch.Tensor,  # [N, A]
+    logits_all: torch.Tensor,  # [N, A]
     a: torch.Tensor,  # [N]
     mask: torch.Tensor,  # [N, A]
     indices: List[int],
@@ -168,7 +217,7 @@ def _e_step_newton(
         return float(math.exp(prior.mu))
 
     # Slice data for this participant
-    qj = q_all[indices]  # [T, A]
+    phi = logits_all[indices]  # [T, A]
     aj = a[indices]  # [T]
     mj = mask[indices]  # [T, A]
 
@@ -176,7 +225,7 @@ def _e_step_newton(
 
     def _obj(zv: float) -> float:
         beta_ = math.exp(zv)
-        logits_ = beta_ * qj
+        logits_ = beta_ * phi
         lse_ = masked_logsumexp(logits_, mj, dim=-1)
         chosen_ = logits_.gather(1, aj.view(-1, 1)).squeeze(1)
         lp_ = torch.sum(chosen_ - lse_).item()
@@ -186,14 +235,14 @@ def _e_step_newton(
     for _ in range(max_iter):
         beta = math.exp(z)
         # pi_beta over legal actions
-        logits = beta * qj  # [T, A]
+        logits = beta * phi  # [T, A]
         pi = masked_softmax(logits, mj, dim=-1)  # [T, A]
-        # E_pi[Q] and Var_pi[Q]
-        e_q = torch.sum(pi * qj, dim=-1)  # [T]
-        e_q2 = torch.sum(pi * (qj**2), dim=-1)
+        # E_pi[phi] and Var_pi[phi]
+        e_q = torch.sum(pi * phi, dim=-1)  # [T]
+        e_q2 = torch.sum(pi * (phi**2), dim=-1)
         var_q = torch.clamp(e_q2 - e_q**2, min=0.0)
         # Gather chosen Q(s,a)
-        q_chosen = qj.gather(1, aj.view(-1, 1)).squeeze(1)  # [T]
+        q_chosen = phi.gather(1, aj.view(-1, 1)).squeeze(1)  # [T]
 
         # g and H (on log scale z)
         g = beta * torch.sum(q_chosen - e_q).item() - (z - prior.mu) / (prior.sigma**2)
@@ -236,7 +285,7 @@ def _e_step_newton(
 
 
 def update_betas_for_all(
-    q_all: torch.Tensor,
+    logits_all: torch.Tensor,
     a: torch.Tensor,
     mask: torch.Tensor,
     pid_index: Dict[int, List[int]],
@@ -245,7 +294,7 @@ def update_betas_for_all(
 ) -> Dict[int, float]:
     betas: Dict[int, float] = {}
     for pid, idxs in pid_index.items():
-        betas[pid] = _e_step_newton(q_all, a, mask, idxs, prior=prior, z_init=z0)
+        betas[pid] = _e_step_newton(logits_all, a, mask, idxs, prior=prior, z_init=z0)
     return betas
 
 
@@ -282,16 +331,37 @@ class EstimatorConfig:
     newton_tol: float = 1e-6
     beta_min: float = 1e-3
     beta_max: float = 1e3
+    # Policy head
+    policy_head: str = "q"  # {"q", "adv"}
+    adv_normalize: str = "meanstd"
+    adv_eps: float = 0.05
+    adv_clip: Optional[float] = 20.0
 
 
-def behavior_nll(q: torch.Tensor, a: torch.Tensor, legal: torch.Tensor, beta_per_row: torch.Tensor) -> torch.Tensor:
+def _make_policy_logits(
+    q: torch.Tensor,
+    legal: torch.Tensor,
+    *,
+    head: str,
+    normalize: str,
+    eps: float,
+    clamp: Optional[float],
+) -> torch.Tensor:
+    if head == "q":
+        return q
+    if head == "adv":
+        return advantage_from_q(q, legal, normalize=normalize, eps=eps, clamp=clamp)
+    raise ValueError(f"Unknown policy_head '{head}'. Expected 'q' or 'adv'.")
+
+
+def behavior_nll(logits: torch.Tensor, a: torch.Tensor, legal: torch.Tensor, beta_per_row: torch.Tensor) -> torch.Tensor:
     """-sum log pi(a|s,beta) over rows.
 
     q: [N, A], a: [N], legal: [N, A] bool, beta_per_row: [N]
     """
-    logits = q * beta_per_row.view(-1, 1)
-    lse = masked_logsumexp(logits, legal, dim=-1)
-    chosen = (logits.gather(1, a.view(-1, 1)).squeeze(1))
+    scaled = logits * beta_per_row.view(-1, 1)
+    lse = masked_logsumexp(scaled, legal, dim=-1)
+    chosen = scaled.gather(1, a.view(-1, 1)).squeeze(1)
     return torch.sum(lse - chosen)
 
 
@@ -342,8 +412,16 @@ def estimate_beta_q(cfg: EstimatorConfig) -> str:
         # E-step: update betas for all participants using current Q
         with torch.no_grad():
             q_all = model(batch.s)  # [N, A]
+            policy_logits_all = _make_policy_logits(
+                q_all,
+                batch.legal_s,
+                head=cfg.policy_head,
+                normalize=cfg.adv_normalize,
+                eps=cfg.adv_eps,
+                clamp=cfg.adv_clip,
+            )
         betas = update_betas_for_all(
-            q_all,
+            policy_logits_all,
             batch.a,
             batch.legal_s,
             pid_index,
@@ -352,13 +430,28 @@ def estimate_beta_q(cfg: EstimatorConfig) -> str:
         )
         if cfg.debug:
             finite = [b for b in betas.values() if math.isfinite(b)]
+            if cfg.policy_head == "adv":
+                # Estimate average per-sample variance of advantages to diagnose identifiability.
+                beta_values = torch.tensor(
+                    [betas[int(p)] for p in batch.pid.tolist()],
+                    dtype=torch.float32,
+                    device=policy_logits_all.device,
+                )
+                logits = policy_logits_all
+                pi = masked_softmax(beta_values.view(-1, 1) * logits, batch.legal_s, dim=-1)
+                e_adv = torch.sum(pi * logits, dim=-1)
+                e_adv2 = torch.sum(pi * (logits**2), dim=-1)
+                var_adv = torch.mean(torch.clamp(e_adv2 - e_adv**2, min=0.0)).item()
+            else:
+                var_adv = float("nan")
             logger.info(
-                "Round %d E-step: beta mean=%.4f std=%.4f min=%.4f max=%.4f",
+                "Round %d E-step: beta mean=%.4f std=%.4f min=%.4f max=%.4f var_logits=%.4f",
                 rd,
                 float(np.mean(finite)) if finite else float("nan"),
                 float(np.std(finite)) if finite else float("nan"),
                 float(np.min(finite)) if finite else float("nan"),
                 float(np.max(finite)) if finite else float("nan"),
+                var_adv,
             )
 
         # M-step: optimize Q with fixed betas
@@ -378,13 +471,38 @@ def estimate_beta_q(cfg: EstimatorConfig) -> str:
             q = model(s)
             q_next = model(ns).detach()  # stop-grad on target for stability
 
-            nll = behavior_nll(q, a, legal_s, beta_row) / max(1, len(idx))
+            policy_logits = _make_policy_logits(
+                q,
+                legal_s,
+                head=cfg.policy_head,
+                normalize=cfg.adv_normalize,
+                eps=cfg.adv_eps,
+                clamp=cfg.adv_clip,
+            )
+
+            nll = behavior_nll(policy_logits, a, legal_s, beta_row) / max(1, len(idx))
             # Bellman residual on chosen a only
             q_sa = q.gather(1, a.view(-1, 1)).squeeze(1)
             bell = F.mse_loss(soft_bellman_residual(q_sa, q_next, r, done, legal_ns, cfg.gamma, cfg.tau), torch.zeros_like(q_sa))
             cql = cql_term(q, a, legal_s)
 
             loss = nll + cfg.lambda_bell * bell + cfg.lambda_cql * cql
+
+            if not torch.isfinite(loss):
+                if cfg.debug:
+                    def _maybe_float(t: torch.Tensor) -> float:
+                        val = t.detach().cpu()
+                        return float(val) if torch.isfinite(val) else float("nan")
+
+                    logger.warning(
+                        "Skipping update due to non-finite loss (loss=%.3e, nll=%.3e, bell=%.3e, cql=%.3e)",
+                        _maybe_float(loss),
+                        _maybe_float(nll),
+                        _maybe_float(bell),
+                        _maybe_float(cql),
+                    )
+                opt.zero_grad(set_to_none=True)
+                continue
 
             opt.zero_grad(set_to_none=True)
             loss.backward()
@@ -404,7 +522,15 @@ def estimate_beta_q(cfg: EstimatorConfig) -> str:
     # Final E-step for reporting
     with torch.no_grad():
         q_all = model(batch.s)
-    betas = update_betas_for_all(q_all, batch.a, batch.legal_s, pid_index, prior=prior, z0=prior.mu)
+        policy_logits_all = _make_policy_logits(
+            q_all,
+            batch.legal_s,
+            head=cfg.policy_head,
+            normalize=cfg.adv_normalize,
+            eps=cfg.adv_eps,
+            clamp=cfg.adv_clip,
+        )
+    betas = update_betas_for_all(policy_logits_all, batch.a, batch.legal_s, pid_index, prior=prior, z0=prior.mu)
 
     # Write outputs
     from datetime import datetime
@@ -432,6 +558,10 @@ def estimate_beta_q(cfg: EstimatorConfig) -> str:
         "tau": cfg.tau,
         "state_dim": s_dim,
         "num_actions": a_dim,
+        "policy_head": cfg.policy_head,
+        "adv_normalize": cfg.adv_normalize,
+        "adv_eps": cfg.adv_eps,
+        "adv_clip": cfg.adv_clip,
         "debug": cfg.debug,
     }
     with open(os.path.join(run_dir, "manifest.json"), "w", encoding="utf-8") as f:
@@ -459,6 +589,20 @@ def main() -> None:  # pragma: no cover (thin CLI)
     p.add_argument("--beta-mu", type=float, default=0.0)
     p.add_argument("--beta-sigma", type=float, default=0.5)
     p.add_argument("--hidden", type=int, default=128)
+    p.add_argument("--policy-head", choices=["q", "adv"], default="q", help="Policy head for behavior likelihood.")
+    p.add_argument(
+        "--adv-normalize",
+        choices=["none", "mean", "meanstd"],
+        default="meanstd",
+        help="Advantage normalization when --policy-head adv.",
+    )
+    p.add_argument("--adv-eps", type=float, default=0.05, help="Minimum per-state std when normalizing advantages.")
+    p.add_argument(
+        "--adv-clip",
+        type=float,
+        default=20.0,
+        help="Clip normalized advantages into [-adv-clip, adv-clip]; set negative to disable.",
+    )
 
     args = p.parse_args()
     cfg = EstimatorConfig(
@@ -477,6 +621,10 @@ def main() -> None:  # pragma: no cover (thin CLI)
         beta_mu=args.beta_mu,
         beta_sigma=args.beta_sigma,
         hidden=args.hidden,
+        policy_head=args.policy_head,
+        adv_normalize=args.adv_normalize,
+        adv_eps=args.adv_eps,
+        adv_clip=None if args.adv_clip is not None and args.adv_clip < 0 else args.adv_clip,
     )
     out = estimate_beta_q(cfg)
     print(out)

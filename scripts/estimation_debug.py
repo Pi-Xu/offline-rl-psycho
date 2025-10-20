@@ -51,6 +51,29 @@ def main() -> None:
     p.add_argument("--trace-pids", type=int, default=0, help="Trace Newton steps for first K participant IDs")
     p.add_argument("--print-trace", action="store_true", help="Print compact traces to stdout")
     p.add_argument("--run-estimator", action="store_true", help="Run full estimator after traces")
+    p.add_argument(
+        "--policy-head-adv",
+        action="store_true",
+        help="Enable advantage-based policy head for behavior likelihood.",
+    )
+    p.add_argument(
+        "--adv-normalize",
+        choices=["none", "mean", "meanstd"],
+        default=None,
+        help="Override advantage normalization strategy (default: meanstd when enabled).",
+    )
+    p.add_argument(
+        "--adv-eps",
+        type=float,
+        default=0.05,
+        help="Minimum per-state std when advantage normalization divides by std.",
+    )
+    p.add_argument(
+        "--adv-clip",
+        type=float,
+        default=20.0,
+        help="Clip normalized advantages into [-adv-clip, adv-clip]; set negative to disable.",
+    )
     args = p.parse_args()
 
     batch, s_dim, a_dim, pid_index = load_dataset(args.dataset_dir, device=args.device)
@@ -81,6 +104,8 @@ def main() -> None:
             print(f"  monotonic_obj={mono}")
 
     if args.run_estimator:
+        policy_head = "adv" if args.policy_head_adv else "q"
+        adv_normalize = args.adv_normalize or ("meanstd" if policy_head == "adv" else "none")
         cfg = EstimatorConfig(
             dataset_dir=args.dataset_dir,
             device=args.device,
@@ -96,6 +121,10 @@ def main() -> None:
             beta_mu=args.beta_mu,
             beta_sigma=args.beta_sigma,
             hidden=args.hidden,
+            policy_head=policy_head,
+            adv_normalize=adv_normalize,
+            adv_eps=args.adv_eps,
+            adv_clip=None if args.adv_clip is not None and args.adv_clip < 0 else args.adv_clip,
         )
         out_dir = estimate_beta_q(cfg)
         print(f"Estimator run_dir: {out_dir}")

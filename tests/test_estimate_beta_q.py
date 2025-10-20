@@ -9,6 +9,7 @@ import torch
 from mdpmm.inference.estimate_beta_q import (
     BetaPrior,
     TrajBatch,
+    advantage_from_q,
     behavior_nll,
     estimate_beta_q,
     load_dataset,
@@ -61,6 +62,14 @@ def test_masked_softmax_sanity() -> None:
     assert p[0, 1] == 0.0
 
 
+def test_advantage_meanstd_single_legal_grad_finite() -> None:
+    q = torch.tensor([[0.1, 0.2, -0.3], [10.0, 10.0, 10.0]], requires_grad=True)
+    legal = torch.tensor([[True, True, False], [True, False, False]])
+    out = advantage_from_q(q, legal, normalize="meanstd", eps=0.05, clamp=20.0)
+    out.sum().backward()
+    assert torch.isfinite(q.grad).all()
+
+
 def test_e_step_updates_beta_direction(tmp_path: Path) -> None:
     # Build a tiny dataset and a fixed Q table to drive betas
     ds = _write_toy_dataset(tmp_path)
@@ -93,4 +102,3 @@ def test_estimator_smoke_runs(tmp_path: Path) -> None:
     assert Path(run_dir).exists()
     assert (Path(run_dir) / "q.pt").exists()
     assert (Path(run_dir) / "beta_estimates.json").exists()
-
