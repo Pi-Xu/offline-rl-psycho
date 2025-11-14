@@ -48,6 +48,14 @@ def main() -> None:
     # Save CSV + metrics first; we'll handle plots here to add annotations
     paths = save_beta_recovery_results(out_dir, rows, metrics, make_plots=False)
 
+    print("metrics:")
+    for key in sorted(metrics):
+        val = metrics[key]
+        if isinstance(val, (int, float)) and math.isfinite(val):
+            print(f"  {key}: {val:.6f}")
+        else:
+            print(f"  {key}: nan")
+
     if not args.no_plots and len(rows) > 0:
         # Local plotting with annotations for Pearson r and Spearman rho
         import matplotlib
@@ -63,9 +71,13 @@ def main() -> None:
         hi = max(max(xt), max(yh))
         # Scatter with 45-degree line and annotation
         sc_path = os.path.join(out_dir, "scatter_true_vs_hat.png")
-        fig, ax = plt.subplots(figsize=(5, 4))
+        fig, ax = plt.subplots(figsize=(5, 5))
         ax.scatter(xt, yh, alpha=0.75)
+        pad = max(1e-8, 0.05 * (hi - lo))
         ax.plot([lo, hi], [lo, hi], color="gray", linestyle="--", linewidth=1)
+        ax.set_xlim(lo - pad, hi + pad)
+        ax.set_ylim(lo - pad, hi + pad)
+        ax.set_aspect("equal", adjustable="box")
         ax.set_xlabel("beta (true)")
         ax.set_ylabel("beta (estimated)")
         title = "Beta Recovery"
@@ -97,6 +109,44 @@ def main() -> None:
         plt.close(fig)
         paths["scatter"] = sc_path
         paths["scatter_pdf"] = pdf_path
+
+        # Log-log scatter with annotation on log-domain metrics
+        log_sc_path = os.path.join(out_dir, "scatter_log_true_vs_hat.png")
+        log_xt = [math.log(r.beta_true) for r in rows]
+        log_yh = [math.log(r.beta_hat) for r in rows]
+        log_lo = min(min(log_xt), min(log_yh))
+        log_hi = max(max(log_xt), max(log_yh))
+        fig, ax = plt.subplots(figsize=(5, 5))
+        ax.scatter(log_xt, log_yh, alpha=0.75)
+        log_pad = max(1e-8, 0.05 * (log_hi - log_lo))
+        ax.plot([log_lo, log_hi], [log_lo, log_hi], color="gray", linestyle="--", linewidth=1)
+        ax.set_xlim(log_lo - log_pad, log_hi + log_pad)
+        ax.set_ylim(log_lo - log_pad, log_hi + log_pad)
+        ax.set_aspect("equal", adjustable="box")
+        ax.set_xlabel("log beta (true)")
+        ax.set_ylabel("log beta (estimated)")
+        ax.set_title("Log Beta Recovery")
+        log_r = metrics.get("log_pearson_r")
+        log_rho = metrics.get("log_spearman_r")
+        log_rmse = metrics.get("log_rmse")
+        txt = f"log r = {_fmt(log_r)}  |  log rho = {_fmt(log_rho)}  |  log RMSE = {_fmt(log_rmse)}"
+        ax.text(
+            0.02,
+            0.98,
+            txt,
+            transform=ax.transAxes,
+            fontsize=10,
+            va="top",
+            ha="left",
+            bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"),
+        )
+        fig.tight_layout()
+        fig.savefig(log_sc_path, dpi=300)
+        log_pdf_path = log_sc_path.replace(".png", ".pdf")
+        fig.savefig(log_pdf_path)
+        plt.close(fig)
+        paths["scatter_log"] = log_sc_path
+        paths["scatter_log_pdf"] = log_pdf_path
 
         # Absolute error histogram (no annotation needed here)
         eh_path = os.path.join(out_dir, "error_hist.png")

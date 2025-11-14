@@ -111,6 +111,28 @@ class PegSolEnv:
         self._steps = 0
         return self._obs(), {"action_mask": self.legal_action_mask()}
 
+    def reset_to_board(self, board: np.ndarray) -> Tuple[np.ndarray, Dict]:
+        """Reset the environment to ``board`` after validation.
+
+        ``board`` must match ``valid_mask`` in shape, use binary values {0,1},
+        and have zeros in every invalid cell. The method copies the provided
+        array to avoid external mutation.
+        """
+
+        arr = np.asarray(board, dtype=np.int8)
+        if arr.shape != self.valid_mask.shape:
+            raise ValueError(
+                f"board shape {arr.shape} does not match valid_mask {self.valid_mask.shape}"
+            )
+        if not np.isin(arr, (0, 1)).all():
+            raise ValueError("board must be binary (0 or 1 per cell)")
+        invalid_mask = self.valid_mask == 0
+        if np.any(arr[invalid_mask] != 0):
+            raise ValueError("board places pegs on invalid cells")
+        self._board = arr.copy()
+        self._steps = 0
+        return self._obs(), {"action_mask": self.legal_action_mask()}
+
     def legal_action_mask(self) -> np.ndarray:
         assert self._board is not None
         board = self._board

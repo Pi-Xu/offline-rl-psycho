@@ -4,6 +4,7 @@ defaults:
   - train: default
   - eval: default
   - paths: default
+  - reverse: "off"
   - _self_
 
 # Top-level switches

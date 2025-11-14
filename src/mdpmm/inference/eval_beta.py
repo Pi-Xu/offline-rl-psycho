@@ -124,7 +124,12 @@ class BetaEvalRow:
 
 
 def evaluate_beta_recovery(true_betas: Dict[int, float], est_betas: Dict[int, float]) -> Tuple[List[BetaEvalRow], dict]:
-    """Join on pid, compute per-row errors and global metrics."""
+    """Join on pid, compute per-row errors and global metrics.
+
+    The returned metrics cover error aggregates (MAE/RMSE) and correlations on
+    both the original beta scale and log scale, giving additional sensitivity
+    to multiplicative deviations.
+    """
     pids = sorted(set(true_betas.keys()) & set(est_betas.keys()))
     rows: List[BetaEvalRow] = []
     for pid in pids:
@@ -138,6 +143,15 @@ def evaluate_beta_recovery(true_betas: Dict[int, float], est_betas: Dict[int, fl
     y = np.array([r.beta_hat for r in rows], dtype=float)
     abs_err = np.array([r.abs_err for r in rows], dtype=float)
     rel_err = np.array([r.rel_err for r in rows if math.isfinite(r.rel_err)], dtype=float)
+    sq_err = (y - x) ** 2 if len(rows) > 0 else np.array([], dtype=float)
+
+    if len(rows) > 0:
+        log_x = np.log(x)
+        log_y = np.log(y)
+        log_abs_err = np.abs(log_y - log_x)
+        log_sq_err = (log_y - log_x) ** 2
+    else:
+        log_x = log_y = log_abs_err = log_sq_err = np.array([], dtype=float)
 
     if len(rows) >= 2:
         denom = float(((x - x.mean()) ** 2).sum())
@@ -155,9 +169,15 @@ def evaluate_beta_recovery(true_betas: Dict[int, float], est_betas: Dict[int, fl
         "pearson_r": _pearsonr(x, y) if len(rows) >= 2 else float("nan"),
         "spearman_r": _spearmanr(x, y) if len(rows) >= 2 else float("nan"),
         "mae": float(abs_err.mean()) if len(rows) > 0 else float("nan"),
+        "rmse": float(np.sqrt(sq_err.mean())) if sq_err.size > 0 else float("nan"),
         "mape": float(rel_err.mean()) if rel_err.size > 0 else float("nan"),
         "median_abs_err": float(np.median(abs_err)) if len(rows) > 0 else float("nan"),
         "r2": r2,
+        "log_mae": float(log_abs_err.mean()) if log_abs_err.size > 0 else float("nan"),
+        "log_rmse": float(np.sqrt(log_sq_err.mean())) if log_sq_err.size > 0 else float("nan"),
+        "median_log_abs_err": float(np.median(log_abs_err)) if log_abs_err.size > 0 else float("nan"),
+        "log_pearson_r": _pearsonr(log_x, log_y) if log_x.size >= 2 else float("nan"),
+        "log_spearman_r": _spearmanr(log_x, log_y) if log_x.size >= 2 else float("nan"),
     }
     return rows, metrics
 
@@ -185,9 +205,34 @@ def save_beta_recovery_results(out_dir: str, rows: List[BetaEvalRow], metrics: d
     csv_path = os.path.join(out_dir, "beta_recovery.csv")
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(["pid", "beta_true", "beta_hat", "abs_err", "rel_err"])
+        w.writerow(
+            [
+                "pid",
+                "beta_true",
+                "beta_hat",
+                "abs_err",
+                "rel_err",
+                "log_beta_true",
+                "log_beta_hat",
+                "log_abs_err",
+            ]
+        )
         for r in rows:
-            w.writerow([r.pid, f"{r.beta_true:.9f}", f"{r.beta_hat:.9f}", f"{r.abs_err:.9f}", f"{r.rel_err:.9f}"])
+            log_bt = math.log(r.beta_true)
+            log_bh = math.log(r.beta_hat)
+            log_abs_err = abs(log_bh - log_bt)
+            w.writerow(
+                [
+                    r.pid,
+                    f"{r.beta_true:.9f}",
+                    f"{r.beta_hat:.9f}",
+                    f"{r.abs_err:.9f}",
+                    f"{r.rel_err:.9f}",
+                    f"{log_bt:.9f}",
+                    f"{log_bh:.9f}",
+                    f"{log_abs_err:.9f}",
+                ]
+            )
 
     # JSON metrics
     json_path = os.path.join(out_dir, "metrics.json")
@@ -203,11 +248,15 @@ def save_beta_recovery_results(out_dir: str, rows: List[BetaEvalRow], metrics: d
             sc_path = os.path.join(out_dir, "scatter_true_vs_hat.png")
             xt = [r.beta_true for r in rows]
             yh = [r.beta_hat for r in rows]
-            fig, ax = plt.subplots(figsize=(5, 4))
+            fig, ax = plt.subplots(figsize=(5, 5))
             ax.scatter(xt, yh, alpha=0.75)
             lo = min(min(xt), min(yh))
             hi = max(max(xt), max(yh))
+            pad = max(1e-8, 0.05 * (hi - lo))
             ax.plot([lo, hi], [lo, hi], color="gray", linestyle="--", linewidth=1)
+            ax.set_xlim(lo - pad, hi + pad)
+            ax.set_ylim(lo - pad, hi + pad)
+            ax.set_aspect("equal", adjustable="box")
             ax.set_xlabel("beta (true)")
             ax.set_ylabel("beta (estimated)")
             ax.set_title("Beta Recovery")
@@ -217,6 +266,29 @@ def save_beta_recovery_results(out_dir: str, rows: List[BetaEvalRow], metrics: d
             plt.close(fig)
             paths["scatter"] = sc_path
             paths["scatter_pdf"] = sc_path.replace(".png", ".pdf")
+
+            # Scatter: log true vs log hat
+            log_sc_path = os.path.join(out_dir, "scatter_log_true_vs_hat.png")
+            log_xt = [math.log(r.beta_true) for r in rows]
+            log_yh = [math.log(r.beta_hat) for r in rows]
+            log_lo = min(min(log_xt), min(log_yh))
+            log_hi = max(max(log_xt), max(log_yh))
+            fig, ax = plt.subplots(figsize=(5, 5))
+            ax.scatter(log_xt, log_yh, alpha=0.75)
+            log_pad = max(1e-8, 0.05 * (log_hi - log_lo))
+            ax.plot([log_lo, log_hi], [log_lo, log_hi], color="gray", linestyle="--", linewidth=1)
+            ax.set_xlim(log_lo - log_pad, log_hi + log_pad)
+            ax.set_ylim(log_lo - log_pad, log_hi + log_pad)
+            ax.set_aspect("equal", adjustable="box")
+            ax.set_xlabel("log beta (true)")
+            ax.set_ylabel("log beta (estimated)")
+            ax.set_title("Log Beta Recovery")
+            fig.tight_layout()
+            fig.savefig(log_sc_path, dpi=300)
+            fig.savefig(log_sc_path.replace(".png", ".pdf"))
+            plt.close(fig)
+            paths["scatter_log"] = log_sc_path
+            paths["scatter_log_pdf"] = log_sc_path.replace(".png", ".pdf")
 
             # Error histogram
             eh_path = os.path.join(out_dir, "error_hist.png")

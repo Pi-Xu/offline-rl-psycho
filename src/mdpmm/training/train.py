@@ -12,6 +12,7 @@ from mdpmm.utils.config import AppSettings, TrainDqnConfig, materialize_run_dir
 from mdpmm.utils.io import append_jsonl, ensure_dir, save_json
 from mdpmm.utils.logging import setup_logging
 from mdpmm.utils.seeding import set_global_seeds
+from mdpmm.training.start_sampler import ReverseStartSampler
 import matplotlib
 from io import BytesIO
 try:
@@ -178,13 +179,39 @@ def train_dqn(config: TrainDqnConfig) -> None:
     buf = ReplayBuffer(config.replay_capacity)
 
     metrics_path = os.path.join(run_dir, "metrics.jsonl")
+    reverse_sampler = None
+    if config.use_reverse_starts:
+        reverse_sampler = ReverseStartSampler.from_config(
+            env,
+            env_id=config.env_id,
+            pool_dir=config.reverse_pool_dir,
+            k_values=config.reverse_k_values,
+            goal_root_spec=config.reverse_goal_roots,
+            pool_size=config.reverse_pool_per_k,
+            dedup_symmetry=config.reverse_dedup_symmetry,
+            base_seed=config.reverse_seed,
+            sampling_mode=config.reverse_sampling_mode,
+            phase_len_episodes=config.reverse_phase_len_episodes,
+            max_attempts=config.reverse_max_attempts,
+        )
+        logger.info(
+            "Reverse starts enabled mode=%s ks=%s pool_dir=%s",
+            config.reverse_sampling_mode,
+            list(config.reverse_k_values),
+            config.reverse_pool_dir,
+        )
     # Track best by highest avg_return; tie-break by higher success_rate, then fewer avg_steps
     best = {"avg_return": float("-inf"), "success_rate": -1.0, "avg_steps": float("inf")}
     global_step = 0
     eval_stats = {}
 
     for ep in range(1, config.train_episodes + 1):
-        obs, info = env.reset(seed=seed + ep)
+        if reverse_sampler is not None:
+            board, reverse_meta = reverse_sampler.sample(ep - 1)
+            obs, info = env.reset_to_board(board)
+        else:
+            obs, info = env.reset(seed=seed + ep)
+            reverse_meta = None
         total_r = 0.0
         steps = 0
         for t in range(config.max_steps_per_episode):
@@ -225,13 +252,24 @@ def train_dqn(config: TrainDqnConfig) -> None:
 
         # Per-episode log
         if config.print_episode and (ep % max(1, config.episode_log_interval) == 0):
-            logger.info(
-                "episode=%d return=%.3f steps=%d epsilon=%.3f",
-                ep,
-                total_r,
-                steps,
-                epsilon,
-            )
+            if reverse_meta is not None:
+                logger.info(
+                    "episode=%d return=%.3f steps=%d epsilon=%.3f start_k=%d start_root=%s",
+                    ep,
+                    total_r,
+                    steps,
+                    epsilon,
+                    reverse_meta["k"],
+                    reverse_meta["root"],
+                )
+            else:
+                logger.info(
+                    "episode=%d return=%.3f steps=%d epsilon=%.3f",
+                    ep,
+                    total_r,
+                    steps,
+                    epsilon,
+                )
         append_jsonl(
             {
                 "episode": ep,
@@ -239,6 +277,15 @@ def train_dqn(config: TrainDqnConfig) -> None:
                 "return": total_r,
                 "steps": steps,
                 "epsilon": epsilon,
+                **(
+                    {
+                        "start_k": reverse_meta["k"],
+                        "start_root": reverse_meta["root"],
+                        "start_pegs": reverse_meta["pegs"],
+                    }
+                    if reverse_meta is not None
+                    else {}
+                ),
             },
             metrics_path,
         )
