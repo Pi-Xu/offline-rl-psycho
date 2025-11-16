@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Callable, Dict
 
 from .peg.peg_env import PegSolEnv
+from .peg.boards import BOARD_SPECS
 import numpy as np
 
 
@@ -17,6 +18,12 @@ _REGISTRY: Dict[str, Callable[[], PegSolEnv]] = {
         ],
     ),
 }
+
+for board_id, spec in BOARD_SPECS.items():
+    _REGISTRY[board_id] = lambda spec=spec: PegSolEnv(
+        valid_mask=spec.valid_mask,
+        initial_board=spec.initial_board,
+    )
 
 
 def make_env(env_id: str):

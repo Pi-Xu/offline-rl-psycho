@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Any
 
@@ -57,51 +57,6 @@ class TrainDqnConfig(BaseModel):
     model_type: str = "mlp"  # one of {mlp, cnn}
     cnn_channels: tuple[int, int] = (16, 32)
     cnn_hidden: int = 256
-    # Reverse start generation / sampling (optional)
-    use_reverse_starts: bool = False
-    reverse_k_values: tuple[int, ...] = (4, 8, 12, 16, 20, 24, 28, 31)
-    reverse_pool_per_k: int = 2000
-    reverse_sampling_mode: str = "mixed"  # {mixed, phased}
-    reverse_phase_len_episodes: int = 250
-    reverse_seed: int = 42
-    reverse_dedup_symmetry: bool = True
-    reverse_goal_roots: Union[str, Tuple[Tuple[int, int], ...]] = "center"
-    reverse_pool_dir: str = "artifacts/datasets/peg/revstarts"
-    reverse_max_attempts: int = 200_000
-
-    @field_validator("reverse_sampling_mode")
-    @classmethod
-    def _validate_sampling_mode(cls, value: str) -> str:
-        v = value.lower()
-        if v not in {"mixed", "phased"}:
-            raise ValueError("reverse_sampling_mode must be 'mixed' or 'phased'")
-        return v
-
-    @field_validator("reverse_k_values")
-    @classmethod
-    def _validate_k_values(cls, value: tuple[int, ...]) -> tuple[int, ...]:
-        if not value:
-            raise ValueError("reverse_k_values cannot be empty")
-        vals = tuple(sorted(int(v) for v in value))
-        if any(v <= 0 for v in vals):
-            raise ValueError("reverse_k_values must be positive")
-        return vals
-
-    @field_validator("reverse_goal_roots", mode="before")
-    @classmethod
-    def _coerce_goal_roots(cls, value: object) -> object:
-        if isinstance(value, str):
-            return value
-        if isinstance(value, (list, tuple)):
-            coords: list[tuple[int, int]] = []
-            for item in value:
-                if isinstance(item, (list, tuple)) and len(item) == 2:
-                    coords.append((int(item[0]), int(item[1])))
-                else:
-                    raise ValueError("goal_roots entries must be coordinate pairs")
-            return tuple(coords)
-        return value
-
 
 class GenerateDataConfig(BaseModel):
     # Model / env
@@ -202,32 +157,6 @@ def build_train_config_from_hydra(cfg: DictConfig) -> TrainDqnConfig:
     cnn_channels = _get_tuple2(getattr(algo, "cnn_channels", None), (16, 32))
     cnn_hidden = int(getattr(algo, "cnn_hidden", 256))
 
-    reverse_cfg = getattr(cfg, "reverse", None)
-    if reverse_cfg is None:
-        reverse_use = False
-        reverse_k_values = (4, 8, 12, 16, 20, 24, 28, 31)
-        reverse_pool_per_k = 2000
-        reverse_sampling_mode = "mixed"
-        reverse_phase_len = 250
-        reverse_seed = int(train.seed)
-        reverse_dedup_symmetry = True
-        reverse_goal_roots = "center"
-        reverse_pool_dir = "artifacts/datasets/peg/revstarts"
-        reverse_max_attempts = 200_000
-    else:
-        reverse_use = bool(getattr(reverse_cfg, "use_reverse_starts", False))
-        reverse_k_values = tuple(int(x) for x in getattr(reverse_cfg, "k_values", (4, 8, 12, 16, 20, 24, 28, 31)))
-        reverse_pool_per_k = int(getattr(reverse_cfg, "pool_per_k", 2000))
-        reverse_sampling_mode = str(getattr(reverse_cfg, "sampling_mode", "mixed"))
-        reverse_phase_len = int(getattr(reverse_cfg, "phase_len_episodes", 250))
-        reverse_seed = int(getattr(reverse_cfg, "seed", train.seed))
-        reverse_dedup_symmetry = bool(getattr(reverse_cfg, "dedup_symmetry", True))
-        reverse_goal_roots = getattr(reverse_cfg, "goal_roots", "center")
-        reverse_pool_dir = str(getattr(reverse_cfg, "pool_dir", "artifacts/datasets/peg/revstarts"))
-        reverse_max_attempts = int(getattr(reverse_cfg, "max_attempts", 200_000))
-
-    reverse_pool_dir_abs = to_absolute_path(reverse_pool_dir)
-
     return TrainDqnConfig(
         env_id=env_id,
         max_steps_per_episode=int(train.max_steps_per_episode),
@@ -257,14 +186,4 @@ def build_train_config_from_hydra(cfg: DictConfig) -> TrainDqnConfig:
         model_type=algo_model_type,
         cnn_channels=cnn_channels,
         cnn_hidden=cnn_hidden,
-        use_reverse_starts=reverse_use,
-        reverse_k_values=reverse_k_values,
-        reverse_pool_per_k=reverse_pool_per_k,
-        reverse_sampling_mode=reverse_sampling_mode,
-        reverse_phase_len_episodes=reverse_phase_len,
-        reverse_seed=reverse_seed,
-        reverse_dedup_symmetry=reverse_dedup_symmetry,
-        reverse_goal_roots=reverse_goal_roots,
-        reverse_pool_dir=reverse_pool_dir_abs,
-        reverse_max_attempts=reverse_max_attempts,
     )

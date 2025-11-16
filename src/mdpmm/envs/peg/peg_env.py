@@ -65,6 +65,7 @@ class PegSolEnv:
         step_penalty: float = -1.0,
         solved_bonus: float = 100.0,
         unsolved_penalty_per_peg: float = 5.0,
+        initial_board: np.ndarray | None = None,
     ):
         self.valid_mask = valid_mask.copy() if valid_mask is not None else _default_board_mask()
         self.actions: List[Action] = _enumerate_actions(self.valid_mask)
@@ -74,21 +75,29 @@ class PegSolEnv:
         self._board: np.ndarray | None = None
         self._steps = 0
         # Initial empty slot; default to center
-        if initial_empty is None:
-            self._initial_empty = (H // 2, W // 2)
+        if initial_board is not None and (initial_empty is not None or initial_empty_choices is not None):
+            raise ValueError("initial_board is mutually exclusive with initial_empty arguments")
+        if initial_board is not None:
+            self._initial_board_template = self._validate_board(np.asarray(initial_board, dtype=np.int8))
+            self._initial_empty = (0, 0)
+            self._initial_empty_choices = None
         else:
-            self._initial_empty = initial_empty
-        # Optional: a set of allowed initial empty coordinates to sample from at reset
-        self._initial_empty_choices: Optional[List[Tuple[int, int]]] = None
-        if initial_empty_choices is not None:
-            # Validate provided choices fall within bounds and valid cells
-            validated: List[Tuple[int, int]] = []
-            for r, c in initial_empty_choices:
-                if 0 <= r < H and 0 <= c < W and self.valid_mask[r, c] == 1:
-                    validated.append((r, c))
-            if not validated:
-                raise ValueError("initial_empty_choices has no valid positions on the board")
-            self._initial_empty_choices = validated
+            if initial_empty is None:
+                self._initial_empty = (H // 2, W // 2)
+            else:
+                self._initial_empty = initial_empty
+            # Optional: a set of allowed initial empty coordinates to sample from at reset
+            self._initial_board_template = None
+            self._initial_empty_choices: Optional[List[Tuple[int, int]]] = None
+            if initial_empty_choices is not None:
+                # Validate provided choices fall within bounds and valid cells
+                validated: List[Tuple[int, int]] = []
+                for r, c in initial_empty_choices:
+                    if 0 <= r < H and 0 <= c < W and self.valid_mask[r, c] == 1:
+                        validated.append((r, c))
+                if not validated:
+                    raise ValueError("initial_empty_choices has no valid positions on the board")
+                self._initial_empty_choices = validated
         # Reward shaping parameters
         self.step_penalty = float(step_penalty)
         self.solved_bonus = float(solved_bonus)
@@ -98,15 +107,18 @@ class PegSolEnv:
     def reset(self, seed: int | None = None) -> Tuple[np.ndarray, Dict]:
         if seed is not None:
             np.random.seed(seed)
-        board = self.valid_mask.astype(np.int8)
-        # initial empty (optionally sampled from allowed choices)
-        if self._initial_empty_choices is not None and len(self._initial_empty_choices) > 0:
-            idx = np.random.randint(0, len(self._initial_empty_choices))
-            r0, c0 = self._initial_empty_choices[idx]
+        if self._initial_board_template is not None:
+            board = self._initial_board_template.copy()
         else:
-            r0, c0 = self._initial_empty
-        if 0 <= r0 < board.shape[0] and 0 <= c0 < board.shape[1]:
-            board[r0, c0] = 0
+            board = self.valid_mask.astype(np.int8)
+            # initial empty (optionally sampled from allowed choices)
+            if self._initial_empty_choices is not None and len(self._initial_empty_choices) > 0:
+                idx = np.random.randint(0, len(self._initial_empty_choices))
+                r0, c0 = self._initial_empty_choices[idx]
+            else:
+                r0, c0 = self._initial_empty
+            if 0 <= r0 < board.shape[0] and 0 <= c0 < board.shape[1]:
+                board[r0, c0] = 0
         self._board = board
         self._steps = 0
         return self._obs(), {"action_mask": self.legal_action_mask()}
@@ -119,17 +131,7 @@ class PegSolEnv:
         array to avoid external mutation.
         """
 
-        arr = np.asarray(board, dtype=np.int8)
-        if arr.shape != self.valid_mask.shape:
-            raise ValueError(
-                f"board shape {arr.shape} does not match valid_mask {self.valid_mask.shape}"
-            )
-        if not np.isin(arr, (0, 1)).all():
-            raise ValueError("board must be binary (0 or 1 per cell)")
-        invalid_mask = self.valid_mask == 0
-        if np.any(arr[invalid_mask] != 0):
-            raise ValueError("board places pegs on invalid cells")
-        self._board = arr.copy()
+        self._board = self._validate_board(board).copy()
         self._steps = 0
         return self._obs(), {"action_mask": self.legal_action_mask()}
 
@@ -192,3 +194,16 @@ class PegSolEnv:
         if not self.legal_action_mask().any():
             return True, False
         return False, False
+
+    def _validate_board(self, board: np.ndarray) -> np.ndarray:
+        arr = np.asarray(board, dtype=np.int8)
+        if arr.shape != self.valid_mask.shape:
+            raise ValueError(
+                f"board shape {arr.shape} does not match valid_mask {self.valid_mask.shape}"
+            )
+        if not np.isin(arr, (0, 1)).all():
+            raise ValueError("board must be binary (0 or 1 per cell)")
+        invalid_mask = self.valid_mask == 0
+        if np.any(arr[invalid_mask] != 0):
+            raise ValueError("board places pegs on invalid cells")
+        return arr.copy()

@@ -66,6 +66,20 @@ Config files live under `configs/`:
 
 Hydra supports overrides for any key, e.g. `algo.lr=1e-3 train.device=cuda`.
 
+### Ready-made run scripts
+
+For quick smoke tests without typing overrides every time, use the helper scripts (all wrap the Hydra command above and save under `artifacts/models/peg/dqn/<run_id>`):
+
+- `scripts/run_peg4x4.sh`
+- `scripts/run_peg4x4_cnn.sh`
+- `scripts/run_peg7x7.sh`
+- `scripts/run_big_cross.sh`
+- `scripts/run_big_L.sh`
+- `scripts/run_diamond.sh`
+- `scripts/run_tiny_cross.sh`
+
+Each script can still take extra overrides, e.g. `bash scripts/run_big_cross.sh train.device=cpu`.
+
 
 ### Use a CNN Q-network
 
@@ -84,35 +98,6 @@ python -m mdpmm.training.hydra_train algo.model_type=cnn algo.cnn_channels='[16,
 ```
 
 Internally, the CNN reshapes the flattened observation `[H*W]` to `[1,H,W]`, applies a small Conv stack with global average pooling, then a linear head to action values.
-
-
-### Reverse-start curriculum (optional)
-
-You can initialise each episode from states that lie exactly K reverse moves away from the solved board (center peg only). This increases the density of successful trajectories and exposes the TD target to positive returns earlier in training.
-
-- Pools are generated via reverse moves (peg added: `to=1, over=0, from=0 → to=0, over=1, from=1`) using the action templates already enumerated by the environment. Symmetry deduplication uses the dihedral group (rotations + flips).
-- Generate or refresh pools beforehand (defaults to the center goal root):
-
-  ```bash
-  python scripts/gen_reverse_pools.py \
-    --env-id peg7x7 \
-    --k-values 4 8 12 16 20 24 28 31 \
-    --pool-size 2000 \
-    --pool-dir artifacts/datasets/peg/revstarts
-  ```
-
-  Pools are stored as compressed `.npz` files (boards + metadata) under `artifacts/datasets/peg/revstarts/peg7x7_K=<K>_root=<root>_seed=<seed>.npz`.
-
-- Enable during Hydra runs by selecting the `reverse` config group:
-
-  ```bash
-  python -m mdpmm.training.hydra_train reverse=center
-  ```
-
-  `reverse=center` unlocks all K simultaneously (mixed sampling). Switch to `reverse=center sampling_mode=phased` to unlock progressively (`phase_len_episodes` controls when the next K is introduced).
-
-- Episode metrics now include `start_k`, `start_root`, and `start_pegs` so you can stratify performance by curriculum depth. The env also exposes `PegSolEnv.reset_to_board(board)` for programmatic rollouts from cached states.
-
 
 
 ## Artifacts
