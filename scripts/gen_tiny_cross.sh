@@ -10,13 +10,13 @@ python -m mdpmm.inference.generate \
   --env-id tiny_cross \
   --run-dir artifacts/models/peg/dqn/tiny_cross_smoke_20251116_163124 \
   --device cuda \
-  --participants 100 \
+  --participants 200 \
   --episodes-per-participant 50 \
   --max-steps-per-episode 100 \
   --seed 42 \
   --beta-mode lognormal \
-  --beta-mu -0.5 \
-  --beta-sigma 1.0 \
+  --beta-mu 0.0 \
+  --beta-sigma 0.75 \
   --out-dir artifacts/datasets/tiny_cross \
   --out-name tiny_cross_logtraj \
   --model-type mlp

@@ -13,7 +13,7 @@ python -m mdpmm.inference.generate \
   --env-id peg7x7 \
   --run-dir artifacts/models/peg/dqn/peg7x7_smoke_20251015_224747 \
   --device cuda \
-  --participants 100 \
+  --participants 200 \
   --episodes-per-participant 50 \
   --max-steps-per-episode 100 \
   --seed 42 \
