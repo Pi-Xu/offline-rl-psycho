@@ -15,6 +15,7 @@ Usage:
 
 import argparse
 import math
+import json
 import os
 import sys
 
@@ -39,6 +40,11 @@ def main() -> None:
     p.add_argument("--estimates-dir", required=True)
     p.add_argument("--out-dir", default=None)
     p.add_argument("--no-plots", action="store_true")
+    p.add_argument(
+        "--hessian-path",
+        default=None,
+        help="Optional path to hessian.json produced by estimation_debug/estimator. Defaults to <estimates-dir>/hessian.json if present.",
+    )
     args = p.parse_args()
 
     out_dir = args.out_dir or os.path.join(args.estimates_dir, "eval")
@@ -55,6 +61,18 @@ def main() -> None:
             print(f"  {key}: {val:.6f}")
         else:
             print(f"  {key}: nan")
+
+    # Try to load Hessian diagnostics (optional)
+    hessian_path = args.hessian_path or os.path.join(args.estimates_dir, "hessian.json")
+    hessian = None
+    if os.path.isfile(hessian_path):
+        try:
+            with open(hessian_path, "r", encoding="utf-8") as f:
+                h_obj = json.load(f)
+            raw = h_obj.get("hessian", {})
+            hessian = {int(k): v for k, v in raw.items()}
+        except Exception:
+            hessian = None
 
     if not args.no_plots and len(rows) > 0:
         # Local plotting with annotations for Pearson r and Spearman rho
@@ -162,6 +180,79 @@ def main() -> None:
         plt.close(fig)
         paths["error_hist"] = eh_path
         paths["error_hist_pdf"] = eh_pdf_path
+
+        # Additional scatter plots when Hessian diagnostics are available
+        def _hess_entry(pid: int):
+            if hessian is None:
+                return None
+            return hessian.get(pid)
+
+        def _widths_and_errors(log_scale: bool):
+            xs = []
+            ys = []
+            for r in rows:
+                h = _hess_entry(r.pid)
+                if not h:
+                    continue
+                H = h.get("H_z")
+                var_z = h.get("var_z")
+                var_beta = h.get("var_beta")
+                if H is None or not math.isfinite(H) or H >= 0:
+                    if log_scale:
+                        continue
+                if log_scale:
+                    var = var_z
+                    if (var is None or not math.isfinite(var) or var <= 0) and H is not None and H < 0:
+                        var = -1.0 / H
+                    if var is None or not math.isfinite(var) or var <= 0:
+                        continue
+                    width = 3.92 * math.sqrt(var)
+                    x = abs(math.log(r.beta_hat) - math.log(r.beta_true))
+                else:
+                    var = var_beta
+                    if (var is None or not math.isfinite(var) or var <= 0) and H is not None and H < 0:
+                        # delta method var_beta = -beta^2 / H
+                        var = -(r.beta_hat**2) / H
+                    if var is None or not math.isfinite(var) or var <= 0:
+                        continue
+                    width = 3.92 * math.sqrt(var)
+                    x = abs(r.beta_hat - r.beta_true)
+                xs.append(x)
+                ys.append(width)
+            return xs, ys
+
+        if hessian is not None:
+            # Beta scale
+            xs, ys = _widths_and_errors(log_scale=False)
+            if len(xs) > 0:
+                ci_path = os.path.join(out_dir, "scatter_ci_beta.png")
+                fig, ax = plt.subplots(figsize=(5, 5))
+                ax.scatter(xs, ys, alpha=0.75)
+                ax.set_xlabel("|beta_hat - beta_true|")
+                ax.set_ylabel("CI width (beta) ≈ 3.92·sqrt(var_beta)")
+                ax.set_title("Abs error vs CI width (beta)")
+                fig.tight_layout()
+                fig.savefig(ci_path, dpi=300)
+                fig.savefig(ci_path.replace(".png", ".pdf"))
+                plt.close(fig)
+                paths["scatter_ci_beta"] = ci_path
+                paths["scatter_ci_beta_pdf"] = ci_path.replace(".png", ".pdf")
+
+            # Log-beta scale
+            xs, ys = _widths_and_errors(log_scale=True)
+            if len(xs) > 0:
+                ci_log_path = os.path.join(out_dir, "scatter_ci_logbeta.png")
+                fig, ax = plt.subplots(figsize=(5, 5))
+                ax.scatter(xs, ys, alpha=0.75)
+                ax.set_xlabel("|log beta_hat - log beta_true|")
+                ax.set_ylabel("CI width (log beta) ≈ 3.92·sqrt(-1/H)")
+                ax.set_title("Abs error vs CI width (log beta)")
+                fig.tight_layout()
+                fig.savefig(ci_log_path, dpi=300)
+                fig.savefig(ci_log_path.replace(".png", ".pdf"))
+                plt.close(fig)
+                paths["scatter_ci_logbeta"] = ci_log_path
+                paths["scatter_ci_logbeta_pdf"] = ci_log_path.replace(".png", ".pdf")
 
     for k, v in paths.items():
         print(f"{k}: {v}")
